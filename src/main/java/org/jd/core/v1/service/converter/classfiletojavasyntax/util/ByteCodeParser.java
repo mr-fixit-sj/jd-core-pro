@@ -1396,10 +1396,23 @@ public class ByteCodeParser {
                 if (((methodDeclaration.getFlags() & (FLAG_SYNTHETIC|FLAG_PRIVATE)) == (FLAG_SYNTHETIC|FLAG_PRIVATE)) && methodDeclaration.getMethod().getName().equals(name1) && methodDeclaration.getMethod().getDescriptor().equals(descriptor1)) {
                     // Create lambda expression
                     ClassFileMethodDeclaration cfmd = (ClassFileMethodDeclaration)methodDeclaration;
+                    List<String> parameterNames = prepareLambdaParameterNames(cfmd.getFormalParameters(), parameterCount);
+                    BaseStatement lambdaStatements = prepareLambdaStatements(cfmd.getFormalParameters(), indyParameters, cfmd.getStatements());
+
+                    if (parameterNames != null) {
+                        parameterNames = new ArrayList<>(parameterNames);
+                    }
+
+                    AttributeCode lambdaCode = cfmd.getMethod().getAttribute("Code");
+
+                    if ((lambdaCode != null) && (lambdaCode.getAttribute("LocalVariableTable") == null)) {
+                        // Generated names: avoid the names of the enclosing method
+                        int capturedCount = (indyParameters == null) ? 0 : indyParameters.size();
+                        localVariableMaker.addLambda(parameterNames, searchLambdaLocalVariables(cfmd.getFormalParameters(), capturedCount, lambdaStatements));
+                    }
                     stack.push(new LambdaIdentifiersExpression(
                             lineNumber, indyMethodTypes.returnedType, indyMethodTypes.returnedType,
-                            prepareLambdaParameterNames(cfmd.getFormalParameters(), parameterCount),
-                            prepareLambdaStatements(cfmd.getFormalParameters(), indyParameters, cfmd.getStatements())));
+                            parameterNames, lambdaStatements));
                     return;
                 }
             }
@@ -1439,6 +1452,54 @@ public class ByteCodeParser {
         }
     }
 
+    /**
+     * @return the parameters and the local variables of the synthetic method of a lambda
+     */
+    private static Set<AbstractLocalVariable> searchLambdaLocalVariables(BaseFormalParameter formalParameters, int capturedCount, BaseStatement statements) {
+        Set<AbstractLocalVariable> localVariables = new LinkedHashSet<>();
+        Set<AbstractLocalVariable> capturedVariables = new HashSet<>();
+
+        if (formalParameters != null) {
+            int index = 0;
+
+            for (FormalParameter formalParameter : formalParameters) {
+                if (formalParameter instanceof ClassFileFormalParameter) {
+                    AbstractLocalVariable lv = ((ClassFileFormalParameter)formalParameter).getLocalVariable();
+
+                    if (index < capturedCount) {
+                        // Captured variable: named after the enclosing variable
+                        capturedVariables.add(lv);
+                    } else {
+                        localVariables.add(lv);
+                    }
+                }
+                index++;
+            }
+        }
+
+        if (statements != null) {
+            statements.accept(new AbstractJavaSyntaxVisitor() {
+                @Override
+                public void visit(LocalVariableReferenceExpression expression) {
+                    if (expression instanceof ClassFileLocalVariableReferenceExpression) {
+                        localVariables.add(((ClassFileLocalVariableReferenceExpression)expression).getLocalVariable());
+                    }
+                }
+
+                @Override
+                public void visit(LocalVariableDeclarator declarator) {
+                    if (declarator instanceof ClassFileLocalVariableDeclarator) {
+                        localVariables.add(((ClassFileLocalVariableDeclarator)declarator).getLocalVariable());
+                    }
+                    super.visit(declarator);
+                }
+            });
+        }
+
+        localVariables.removeAll(capturedVariables);
+        return localVariables;
+    }
+
     private BaseStatement prepareLambdaStatements(BaseFormalParameter formalParameters, BaseExpression indyParameters, BaseStatement baseStatement) {
         if (baseStatement != null) {
             if ((formalParameters != null) && (indyParameters != null)) {
@@ -1446,31 +1507,24 @@ public class ByteCodeParser {
 
                 if ((size > 0) && (size <= formalParameters.size())) {
                     HashMap<String, String> mapping = new HashMap<>();
-                    Expression expression = indyParameters.getFirst();
+                    Iterator<FormalParameter> formalParameterIterator = formalParameters.iterator();
+                    Iterator<Expression> indyParameterIterator = indyParameters.iterator();
 
-                    if (expression.isLocalVariableReferenceExpression()) {
-                        String name = formalParameters.getFirst().getName();
-                        String newName = expression.getName();
+                    for (int i = 0; i < size; i++) {
+                        FormalParameter formalParameter = formalParameterIterator.next();
+                        Expression expression = indyParameterIterator.next();
 
-                        if (!name.equals(newName)) {
-                            mapping.put(name, newName);
-                        }
-                    }
+                        if (expression.isLocalVariableReferenceExpression()) {
+                            String name = formalParameter.getName();
+                            String newName = expression.getName();
 
-                    if (size > 1) {
-                        DefaultList<FormalParameter> formalParameterList = formalParameters.getList();
-                        DefaultList<Expression> list = indyParameters.getList();
-
-                        for (int i = 1; i < size; i++) {
-                            expression = list.get(i);
-
-                            if (expression.isLocalVariableReferenceExpression()) {
-                                String name = formalParameterList.get(i).getName();
-                                String newName = expression.getName();
-
-                                if (!name.equals(newName)) {
-                                    mapping.put(name, newName);
+                            if (newName == null) {
+                                // Captured variable not named yet (no local variable table)
+                                if ((formalParameter instanceof ClassFileFormalParameter) && (expression instanceof ClassFileLocalVariableReferenceExpression)) {
+                                    localVariableMaker.addAlias(((ClassFileFormalParameter)formalParameter).getLocalVariable(), ((ClassFileLocalVariableReferenceExpression)expression).getLocalVariable());
                                 }
+                            } else if (!name.equals(newName)) {
+                                mapping.put(name, newName);
                             }
                         }
                     }

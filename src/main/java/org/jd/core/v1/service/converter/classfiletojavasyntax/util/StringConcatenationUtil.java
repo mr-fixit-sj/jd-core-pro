@@ -114,7 +114,14 @@ public class StringConcatenationUtil {
                 }
 
                 while (iterator.hasNext()) {
-                    expression = new BinaryOperatorExpression(expression.getLineNumber(), ObjectType.TYPE_STRING, expression, "+", iterator.next(), 6);
+                    Expression operand = iterator.next();
+
+                    if (operand.getPriority() == 4) {
+                        // "s + (a + b)" or "s + (a - b)": keep the operator of the operand apart from the concatenation
+                        operand = new ParenthesesExpression(operand);
+                    }
+
+                    expression = new BinaryOperatorExpression(expression.getLineNumber(), ObjectType.TYPE_STRING, expression, "+", operand, 4);
                 }
 
                 return expression;
@@ -171,7 +178,7 @@ public class StringConcatenationUtil {
 
     private static Expression createFirstStringConcatenationItem(Expression expression) {
         if (!isString(expression)) {
-            expression = new BinaryOperatorExpression(expression.getLineNumber(), ObjectType.TYPE_STRING, StringConstantExpression.EMPTY_STRING, "+", expression, 6);
+            expression = new BinaryOperatorExpression(expression.getLineNumber(), ObjectType.TYPE_STRING, StringConstantExpression.EMPTY_STRING, "+", expression, 4);
         }
 
         return expression;
