@@ -247,6 +247,11 @@ public class ExpressionVisitor extends TypeVisitor {
         BaseType type = expression.getInstanceOfType();
 
         type.accept(this);
+
+        if (expression.getPatternVariable() != null) {
+            tokens.add(TextToken.SPACE);
+            expression.getPatternVariable().accept(this);
+        }
     }
 
     @Override

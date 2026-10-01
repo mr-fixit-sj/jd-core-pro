@@ -63,44 +63,52 @@ public class StringConcatenationUtil {
     }
 
     public static Expression create(String recipe, BaseExpression parameters) {
+        DefaultList<Expression> items = new DefaultList<>();
+        Iterator<Expression> iterator = (parameters == null) ? null : parameters.iterator();
         StringTokenizer st = new StringTokenizer(recipe, "\u0001", true);
 
-        if (st.hasMoreTokens()) {
+        while (st.hasMoreTokens()) {
             String token = st.nextToken();
-            Expression expression = token.equals("\u0001") ? createFirstStringConcatenationItem(parameters.getFirst()) : new StringConstantExpression(token);
 
-            if (parameters.isList()) {
-                DefaultList<Expression> list = parameters.getList();
-                int index = 0;
-
-                while (st.hasMoreTokens()) {
-                    token = st.nextToken();
-                    Expression e = token.equals("\u0001") ? list.get(index++) : new StringConstantExpression(token);
-                    expression = new BinaryOperatorExpression(expression.getLineNumber(), ObjectType.TYPE_STRING, expression, "+", e, 6);
+            if (token.equals("\u0001")) {
+                if ((iterator == null) || !iterator.hasNext()) {
+                    break;
                 }
+                items.add(iterator.next());
             } else {
-                while (st.hasMoreTokens()) {
-                    token = st.nextToken();
-                    Expression e = token.equals("\u0001") ? parameters.getFirst() : new StringConstantExpression(token);
-                    expression = new BinaryOperatorExpression(expression.getLineNumber(), ObjectType.TYPE_STRING, expression, "+", e, 6);
-                }
+                items.add(new StringConstantExpression(token));
             }
-
-            return expression;
-        } else {
-            return StringConstantExpression.EMPTY_STRING;
         }
+
+        return create(items);
     }
 
     public static Expression create(BaseExpression parameters) {
-        switch (parameters.size()) {
+        DefaultList<Expression> items = new DefaultList<>();
+
+        if (parameters != null) {
+            for (Expression parameter : parameters) {
+                items.add(parameter);
+            }
+        }
+
+        return create(items);
+    }
+
+    private static Expression create(DefaultList<Expression> items) {
+        switch (items.size()) {
             case 0:
                 return StringConstantExpression.EMPTY_STRING;
             case 1:
-                return createFirstStringConcatenationItem(parameters.getFirst());
+                return createFirstStringConcatenationItem(items.getFirst());
             default:
-                Iterator<Expression> iterator = parameters.iterator();
-                Expression expression = createFirstStringConcatenationItem(iterator.next());
+                Iterator<Expression> iterator = items.iterator();
+                Expression expression = iterator.next();
+
+                // An empty string prefix is only needed when none of the first two operands is a string
+                if (!isString(expression) && !isString(items.get(1))) {
+                    expression = createFirstStringConcatenationItem(expression);
+                }
 
                 while (iterator.hasNext()) {
                     expression = new BinaryOperatorExpression(expression.getLineNumber(), ObjectType.TYPE_STRING, expression, "+", iterator.next(), 6);
@@ -110,8 +118,12 @@ public class StringConcatenationUtil {
         }
     }
 
+    private static boolean isString(Expression expression) {
+        return expression.getType().equals(ObjectType.TYPE_STRING);
+    }
+
     private static Expression createFirstStringConcatenationItem(Expression expression) {
-        if (!expression.getType().equals(ObjectType.TYPE_STRING)) {
+        if (!isString(expression)) {
             expression = new BinaryOperatorExpression(expression.getLineNumber(), ObjectType.TYPE_STRING, StringConstantExpression.EMPTY_STRING, "+", expression, 6);
         }
 

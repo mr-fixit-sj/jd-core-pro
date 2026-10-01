@@ -15,6 +15,79 @@ import org.jd.core.v1.service.converter.classfiletojavasyntax.model.cfg.BasicBlo
 
 public class ByteCodeUtil {
 
+    /**
+     * @return the offset of the instruction following the one at 'offset'
+     */
+    public static int getNextInstructionOffset(byte[] code, int offset) {
+        int opcode = code[offset] & 255;
+
+        switch (opcode) {
+            case 16: case 18: // BIPUSH, LDC
+            case 21: case 22: case 23: case 24: case 25: // ILOAD, LLOAD, FLOAD, DLOAD, ALOAD
+            case 54: case 55: case 56: case 57: case 58: // ISTORE, LSTORE, FSTORE, DSTORE, ASTORE
+            case 169: // RET
+            case 188: // NEWARRAY
+                return offset + 2;
+            case 17: // SIPUSH
+            case 19: case 20: // LDC_W, LDC2_W
+            case 132: // IINC
+            case 153: case 154: case 155: case 156: case 157: case 158: // IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE
+            case 159: case 160: case 161: case 162: case 163: case 164: case 165: case 166: // IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE, IF_ACMPEQ, IF_ACMPNE
+            case 167: case 168: // GOTO, JSR
+            case 178: case 179: case 180: case 181: // GETSTATIC, PUTSTATIC, GETFIELD, PUTFIELD
+            case 182: case 183: case 184: // INVOKEVIRTUAL, INVOKESPECIAL, INVOKESTATIC
+            case 187: // NEW
+            case 189: // ANEWARRAY
+            case 192: case 193: // CHECKCAST, INSTANCEOF
+            case 198: case 199: // IFNULL, IFNONNULL
+                return offset + 3;
+            case 197: // MULTIANEWARRAY
+                return offset + 4;
+            case 185: case 186: // INVOKEINTERFACE, INVOKEDYNAMIC
+            case 200: case 201: // GOTO_W, JSR_W
+                return offset + 5;
+            case 170: { // TABLESWITCH
+                int i = (offset + 4) & 0xFFFC; // Skip padding
+                i += 4; // Skip default offset
+                int low = ((code[i++] & 255) << 24) | ((code[i++] & 255) << 16) | ((code[i++] & 255) << 8) | (code[i++] & 255);
+                int high = ((code[i++] & 255) << 24) | ((code[i++] & 255) << 16) | ((code[i++] & 255) << 8) | (code[i++] & 255);
+                return i + (4 * (high - low + 1));
+            }
+            case 171: { // LOOKUPSWITCH
+                int i = (offset + 4) & 0xFFFC; // Skip padding
+                i += 4; // Skip default offset
+                int count = ((code[i++] & 255) << 24) | ((code[i++] & 255) << 16) | ((code[i++] & 255) << 8) | (code[i++] & 255);
+                return i + (8 * count);
+            }
+            case 196: // WIDE
+                return offset + (((code[offset + 1] & 255) == 132) ? 6 : 4);
+            default:
+                return offset + 1;
+        }
+    }
+
+    /**
+     * @return the index of the local variable stored by the instruction at 'offset', or -1
+     */
+    public static int getStoredLocalVariableIndex(byte[] code, int offset) {
+        int opcode = code[offset] & 255;
+
+        if ((opcode >= 54) && (opcode <= 58)) { // ISTORE ... ASTORE
+            return code[offset + 1] & 255;
+        } else if ((opcode >= 59) && (opcode <= 78)) { // ISTORE_0 ... ASTORE_3
+            return (opcode - 59) & 3;
+        } else if ((opcode == 132) || (opcode == 169)) { // IINC, RET
+            return (opcode == 132) ? (code[offset + 1] & 255) : -1;
+        } else if (opcode == 196) { // WIDE
+            int wideOpcode = code[offset + 1] & 255;
+            if (((wideOpcode >= 54) && (wideOpcode <= 58)) || (wideOpcode == 132)) {
+                return ((code[offset + 2] & 255) << 8) | (code[offset + 3] & 255);
+            }
+        }
+
+        return -1;
+    }
+
     public static int searchNextOpcode(BasicBlock basicBlock, int maxOffset) {
         byte[] code = basicBlock.getControlFlowGraph().getMethod().<AttributeCode>getAttribute("Code").getCode();
         int offset = basicBlock.getFromOffset();

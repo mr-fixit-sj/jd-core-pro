@@ -187,7 +187,12 @@ public class StatementMaker {
                 }
                 watchdog.check(basicBlock, basicBlock.getSub2());
                 elseStatements = makeSubStatements(watchdog, basicBlock.getSub2(), statements, jumps);
-                statements.add(new IfElseStatement(condition, subStatements, elseStatements));
+                if (subStatements.isEmpty() && (condition instanceof InstanceOfExpression) && (((InstanceOfExpression)condition).getPatternVariable() != null)) {
+                    // "if (!(o instanceof Type variable)) {...}": the 'then' part only contained the pattern binding
+                    statements.add(new IfStatement(new PreOperatorExpression(condition.getLineNumber(), "!", condition), elseStatements));
+                } else {
+                    statements.add(new IfElseStatement(condition, subStatements, elseStatements));
+                }
                 watchdog.check(basicBlock, basicBlock.getNext());
                 makeStatements(watchdog, basicBlock.getNext(), statements, jumps);
                 break;

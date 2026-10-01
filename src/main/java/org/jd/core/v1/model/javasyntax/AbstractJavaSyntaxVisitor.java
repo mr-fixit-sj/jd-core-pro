@@ -264,6 +264,7 @@ public abstract class AbstractJavaSyntaxVisitor extends AbstractTypeArgumentVisi
 
         type.accept(this);
         expression.getExpression().accept(this);
+        safeAccept(expression.getPatternVariable());
     }
 
     @Override

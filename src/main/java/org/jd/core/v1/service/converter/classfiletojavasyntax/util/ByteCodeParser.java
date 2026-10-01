@@ -61,6 +61,9 @@ public class ByteCodeParser {
     private ClassFileBodyDeclaration bodyDeclaration;
     private Map<String, BaseType> typeBounds;
     private Type returnedType;
+    private boolean patternMatchingSupported;
+    // Offset of a type pattern binding sequence (ALOAD, CHECKCAST, ASTORE) -> offset of the next instruction
+    private HashMap<Integer, Integer> patternBindings;
 
     public ByteCodeParser(
             TypeMaker typeMaker, LocalVariableMaker localVariableMaker, ClassFile classFile,
@@ -68,6 +71,7 @@ public class ByteCodeParser {
         this.typeMaker = typeMaker;
         this.localVariableMaker = localVariableMaker;
         this.genericTypesSupported = (classFile.getMajorVersion() >= 49); // (majorVersion >= Java 5)
+        this.patternMatchingSupported = (classFile.getMajorVersion() >= 60); // (majorVersion >= Java 16)
         this.internalTypeName = classFile.getInternalTypeName();
         this.attributeBootstrapMethods = classFile.getAttribute("BootstrapMethods");
         this.bodyDeclaration = bodyDeclaration;
@@ -102,6 +106,16 @@ public class ByteCodeParser {
         AbstractLocalVariable localVariable;
 
         for (int offset=fromOffset; offset<toOffset; offset++) {
+            if (patternBindings != null) {
+                Integer nextOffset = patternBindings.get(offset);
+
+                if (nextOffset != null) {
+                    // Skip binding already declared by a type pattern ("instanceof Type variable")
+                    offset = nextOffset - 1;
+                    continue;
+                }
+            }
+
             int opcode = code[offset] & 255;
             int lineNumber = syntheticFlag ? Expression.UNKNOWN_LINE_NUMBER : cfg.getLineNumber(offset);
 
@@ -841,7 +855,11 @@ public class ByteCodeParser {
                     if (type1 == null) {
                         type1 = PrimitiveTypeUtil.getPrimitiveTypeFromDescriptor(typeName);
                     }
-                    stack.push(new InstanceOfExpression(lineNumber, stack.pop(), type1));
+                    InstanceOfExpression instanceOfExpression = new InstanceOfExpression(lineNumber, stack.pop(), type1);
+                    if (patternMatchingSupported && type1.isObjectType()) {
+                        parsePatternBinding(method, code, offset, statements, instanceOfExpression);
+                    }
+                    stack.push(instanceOfExpression);
                     break;
                 case 194: // MONITORENTER
                     statements.add(new ClassFileMonitorEnterStatement(stack.pop()));
@@ -971,6 +989,63 @@ public class ByteCodeParser {
         }
 
         return parameter;
+    }
+
+    /**
+     * Declare the variable of a Java 16+ type pattern ("expression instanceof Type variable") in the 'instanceof'
+     * expression and skip its binding sequence.
+     *
+     * @see PatternMatchingUtil
+     * @param offset offset of the last byte of the INSTANCEOF instruction
+     */
+    private void parsePatternBinding(Method method, byte[] code, int offset, Statements statements, InstanceOfExpression instanceOfExpression) {
+        Expression operand = instanceOfExpression.getExpression();
+
+        if (!(operand instanceof ClassFileLocalVariableReferenceExpression)) {
+            return;
+        }
+
+        AbstractLocalVariable operandLocalVariable = ((ClassFileLocalVariableReferenceExpression)operand).getLocalVariable();
+        int instanceOfOffset = offset - 2;
+        int bindingOffset = PatternMatchingUtil.searchBindingOffset(code, instanceOfOffset, operandLocalVariable.getIndex());
+
+        if ((bindingOffset == -1) || !PatternMatchingUtil.isBindingVariable(method, code, bindingOffset)) {
+            return;
+        }
+
+        int storeOffset = PatternMatchingUtil.getBindingStoreOffset(code, bindingOffset);
+        int storeIndex = ByteCodeUtil.getStoredLocalVariableIndex(code, storeOffset);
+        int nextOffset = ByteCodeUtil.getNextInstructionOffset(code, storeOffset);
+        Type type = instanceOfExpression.getInstanceOfType();
+        AbstractLocalVariable localVariable = localVariableMaker.getLocalVariableInAssignment(typeBounds, storeIndex, nextOffset, type);
+
+        if (localVariable.isDeclared()) {
+            return;
+        }
+
+        localVariable.typeOnRight(typeBounds, type);
+        localVariable.setDeclared(true);
+
+        if (!statements.isEmpty() && PatternMatchingUtil.isInlinableOperandVariable(method, code, operandLocalVariable.getIndex(), instanceOfOffset)) {
+            // javac stores a non-variable operand in a synthetic variable: inline it
+            Expression lastExpression = statements.getLast().getExpression();
+
+            if (lastExpression.isBinaryOperatorExpression() && "=".equals(lastExpression.getOperator()) &&
+                    (lastExpression.getLeftExpression() instanceof ClassFileLocalVariableReferenceExpression) &&
+                    (((ClassFileLocalVariableReferenceExpression)lastExpression.getLeftExpression()).getLocalVariable() == operandLocalVariable)) {
+                statements.removeLast();
+                instanceOfExpression.setExpression(lastExpression.getRightExpression());
+                localVariableMaker.removeLocalVariable(operandLocalVariable);
+            }
+        }
+
+        instanceOfExpression.setPatternVariable(new ClassFileLocalVariableReferenceExpression(instanceOfExpression.getLineNumber(), nextOffset, localVariable));
+
+        if (patternBindings == null) {
+            patternBindings = new HashMap<>();
+        }
+
+        patternBindings.put(bindingOffset, nextOffset);
     }
 
     private AbstractLocalVariable getLocalVariableInAssignment(int index, int offset, Expression value) {

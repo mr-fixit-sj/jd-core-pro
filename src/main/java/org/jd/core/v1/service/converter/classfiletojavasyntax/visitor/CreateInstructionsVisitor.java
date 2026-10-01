@@ -113,7 +113,7 @@ public class CreateInstructionsVisitor extends AbstractJavaSyntaxVisitor {
             boolean containsLineNumber = (attributeCode.getAttribute("LineNumberTable") != null);
 
             try {
-                ControlFlowGraph cfg = ControlFlowGraphMaker.make(method);
+                ControlFlowGraph cfg = ControlFlowGraphMaker.make(method, classFile.getMajorVersion());
 
                 if (cfg != null) {
                     ControlFlowGraphGotoReducer.reduce(cfg);
