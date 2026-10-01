@@ -7,6 +7,7 @@
 
 package org.jd.core.v1.service.converter.classfiletojavasyntax.model.javasyntax.statement;
 
+import org.jd.core.v1.model.javasyntax.expression.Expression;
 import org.jd.core.v1.model.javasyntax.statement.BaseStatement;
 import org.jd.core.v1.model.javasyntax.statement.TryStatement;
 import org.jd.core.v1.model.javasyntax.type.ObjectType;
@@ -45,6 +46,27 @@ public class ClassFileTryStatement extends TryStatement {
 
     public boolean isEclipse() {
         return eclipse;
+    }
+
+    /**
+     * Resource whose name is the name of its local variable, known once the names are generated.
+     */
+    public static class ClassFileResource extends TryStatement.Resource {
+        protected AbstractLocalVariable localVariable;
+
+        public ClassFileResource(ObjectType type, AbstractLocalVariable localVariable, Expression expression) {
+            super(type, null, expression);
+            this.localVariable = localVariable;
+        }
+
+        public AbstractLocalVariable getLocalVariable() {
+            return localVariable;
+        }
+
+        @Override
+        public String getName() {
+            return localVariable.getName();
+        }
     }
 
     public static class CatchClause extends TryStatement.CatchClause {

@@ -28,6 +28,10 @@ public abstract class TypeDeclaration implements BaseTypeDeclaration, MemberDecl
         return annotationReferences;
     }
 
+    public void setFlags(int flags) {
+        this.flags = flags;
+    }
+
     public int getFlags() {
         return flags;
     }

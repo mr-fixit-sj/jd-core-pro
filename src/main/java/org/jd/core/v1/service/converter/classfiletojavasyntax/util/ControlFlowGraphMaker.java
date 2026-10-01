@@ -29,6 +29,10 @@ public class ControlFlowGraphMaker {
     protected static final CodeExceptionComparator CODE_EXCEPTION_COMPARATOR = new CodeExceptionComparator();
 
     public static ControlFlowGraph make(Method method) {
+        return make(method, 0);
+    }
+
+    public static ControlFlowGraph make(Method method, int majorVersion) {
         AttributeCode attributeCode = method.getAttribute("Code");
 
         if (attributeCode == null) {
@@ -54,6 +58,8 @@ public class ControlFlowGraphMaker {
 
             int lastOffset = 0;
             int lastStatementOffset = -1;
+            // Stores of type patterns are part of conditions
+            BitSet patternStores = (majorVersion >= PatternMatchingUtil.JAVA_16_MAJOR_VERSION) ? PatternMatchingUtil.searchPatternStores(method, code) : null;
 
             for (int offset=0; offset<length; offset++) {
                 nextOffsets[lastOffset] = offset;
@@ -70,13 +76,19 @@ public class ControlFlowGraphMaker {
                         break;
                     case 54: case 55: case 56: case 57: case 58: // ISTORE, LSTORE, FSTORE, DSTORE, ASTORE
                         offset++;
-                        lastStatementOffset = offset;
+                        if ((patternStores == null) || !patternStores.get(offset - 1)) {
+                            lastStatementOffset = offset;
+                        }
+                        break;
+                    case 75: case 76: case 77: case 78: // ASTORE_0 .. ASTORE_3
+                        if ((patternStores == null) || !patternStores.get(offset)) {
+                            lastStatementOffset = offset;
+                        }
                         break;
                     case 59: case 60: case 61: case 62: // ISTORE_0 .. ISTORE_3
                     case 63: case 64: case 65: case 66: // LSTORE_0 .. LSTORE_3
                     case 67: case 68: case 69: case 70: // FSTORE_0 .. FSTORE_3
                     case 71: case 72: case 73: case 74: // DSTORE_0 .. DSTORE_3
-                    case 75: case 76: case 77: case 78: // ASTORE_0 .. ASTORE_3
                     case 79: case 80: case 81: case 82: case 83: case 84: case 85: case 86: // IASTORE, LASTORE, FASTORE, DASTORE, AASTORE, BASTORE, CASTORE, SASTORE
                     case 87: case 88: // POP, POP2
                     case 194: case 195: // MONITORENTER, MONITOREXIT

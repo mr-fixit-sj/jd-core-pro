@@ -24,7 +24,9 @@ import org.jd.core.v1.util.DefaultList;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.jd.core.v1.model.classfile.Constants.ACC_ENUM;
 import static org.jd.core.v1.model.classfile.Constants.ACC_STATIC;
@@ -36,6 +38,10 @@ public class LocalVariableMaker {
     protected HashSet<String> blackListNames = new HashSet<>();
     protected Frame currentFrame = new RootFrame();
     protected AbstractLocalVariable[] localVariableCache;
+    // Lambda parameters capturing local variables -> captured local variables
+    protected HashMap<AbstractLocalVariable, AbstractLocalVariable> aliases;
+    // Lambdas created from synthetic methods: their variables must not shadow the variables of this method
+    protected DefaultList<LambdaVariables> lambdas;
 
     protected TypeMaker typeMaker;
     protected Map<String, BaseType> typeBounds;
@@ -500,6 +506,99 @@ public class LocalVariableMaker {
         currentFrame.updateLocalVariableInForStatements(typeMaker);
         currentFrame.createNames(blackListNames);
         currentFrame.createDeclarations(containsLineNumber);
+
+        if (aliases != null) {
+            // Lambda parameters capturing local variables take their names
+            for (Map.Entry<AbstractLocalVariable, AbstractLocalVariable> entry : aliases.entrySet()) {
+                if (entry.getValue().getName() != null) {
+                    entry.getKey().setName(entry.getValue().getName());
+                }
+            }
+        }
+
+        if (lambdas != null) {
+            renameLambdaVariables();
+        }
+    }
+
+    /**
+     * A lambda variable cannot have the name of a variable of the enclosing method: rename it (generated names of
+     * classes compiled without local variable table).
+     */
+    protected void renameLambdaVariables() {
+        HashSet<String> methodNames = new HashSet<>();
+        Frame root = currentFrame;
+
+        while (root.getParent() != null) {
+            root = root.getParent();
+        }
+
+        root.collectNames(methodNames);
+
+        for (LambdaVariables lambda : lambdas) {
+            HashSet<String> usedNames = new HashSet<>(methodNames);
+
+            for (AbstractLocalVariable lv : lambda.localVariables) {
+                if ((lv.getName() != null) && !methodNames.contains(lv.getName())) {
+                    usedNames.add(lv.getName());
+                }
+            }
+
+            for (AbstractLocalVariable lv : lambda.localVariables) {
+                String name = lv.getName();
+
+                if ((aliases != null) && aliases.containsKey(lv)) {
+                    continue; // Captured variable: same name as the enclosing variable
+                }
+
+                if ((name != null) && methodNames.contains(name)) {
+                    int index = 2;
+                    String newName;
+
+                    while (usedNames.contains(newName = name + index)) {
+                        index++;
+                    }
+
+                    usedNames.add(newName);
+                    lv.setName(newName);
+
+                    if (lambda.parameterNames != null) {
+                        int i = lambda.parameterNames.indexOf(name);
+                        if (i != -1) {
+                            lambda.parameterNames.set(i, newName);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public void addLambda(List<String> parameterNames, Set<AbstractLocalVariable> localVariables) {
+        if (lambdas == null) {
+            lambdas = new DefaultList<>();
+        }
+        lambdas.add(new LambdaVariables(parameterNames, localVariables));
+    }
+
+    protected static class LambdaVariables {
+        protected List<String> parameterNames;
+        protected Set<AbstractLocalVariable> localVariables;
+
+        public LambdaVariables(List<String> parameterNames, Set<AbstractLocalVariable> localVariables) {
+            this.parameterNames = parameterNames;
+            this.localVariables = localVariables;
+        }
+    }
+
+    /**
+     * @param lambdaParameter the parameter of a synthetic lambda method receiving a captured local variable
+     * @param localVariable   the captured local variable, named when this method is made
+     */
+    public void addAlias(AbstractLocalVariable lambdaParameter, AbstractLocalVariable localVariable) {
+        if (aliases == null) {
+            aliases = new HashMap<>();
+        }
+        aliases.put(lambdaParameter, localVariable);
     }
 
     public BaseFormalParameter getFormalParameters() {

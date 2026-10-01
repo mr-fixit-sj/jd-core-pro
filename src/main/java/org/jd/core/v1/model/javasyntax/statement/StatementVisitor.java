@@ -33,6 +33,7 @@ public interface StatementVisitor {
     void visit(SwitchStatement.MultiLabelsBlock statement);
     void visit(SynchronizedStatement statement);
     void visit(ThrowStatement statement);
+    void visit(YieldStatement statement);
     void visit(TryStatement statement);
     void visit(TryStatement.Resource statement);
     void visit(TryStatement.CatchClause statement);

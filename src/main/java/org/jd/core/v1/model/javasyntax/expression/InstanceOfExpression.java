@@ -14,6 +14,7 @@ import org.jd.core.v1.model.javasyntax.type.Type;
 public class InstanceOfExpression extends AbstractLineNumberExpression {
     protected Expression expression;
     protected Type instanceOfType;
+    protected LocalVariableReferenceExpression patternVariable;
 
     public InstanceOfExpression(Expression expression, ObjectType instanceOfType) {
         this.expression = expression;
@@ -37,6 +38,17 @@ public class InstanceOfExpression extends AbstractLineNumberExpression {
 
     public Type getInstanceOfType() {
         return instanceOfType;
+    }
+
+    /**
+     * @return the variable bound by a type pattern ("expression instanceof Type variable", Java 16+), or null
+     */
+    public LocalVariableReferenceExpression getPatternVariable() {
+        return patternVariable;
+    }
+
+    public void setPatternVariable(LocalVariableReferenceExpression patternVariable) {
+        this.patternVariable = patternVariable;
     }
 
     @Override

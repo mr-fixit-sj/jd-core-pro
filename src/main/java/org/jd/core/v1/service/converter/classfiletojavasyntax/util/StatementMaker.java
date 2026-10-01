@@ -53,6 +53,8 @@ public class StatementMaker {
     protected String internalTypeName;
     protected ClassFileBodyDeclaration bodyDeclaration;
     protected DefaultStack<Expression> stack = new DefaultStack<>();
+    // > 0 while the blocks of a switch expression are parsed
+    protected int switchExpressionDepth = 0;
     protected RemoveFinallyStatementsVisitor removeFinallyStatementsVisitor;
     protected RemoveBinaryOpReturnStatementsVisitor removeBinaryOpReturnStatementsVisitor;
     protected UpdateIntegerConstantTypeVisitor updateIntegerConstantTypeVisitor;
@@ -182,12 +184,33 @@ public class StatementMaker {
                 DefaultStack<Expression> backup = new DefaultStack<>(stack);
                 watchdog.check(basicBlock, basicBlock.getSub1());
                 subStatements = makeSubStatements(watchdog, basicBlock.getSub1(), statements, jumps);
+                Expression value1 = (stack.size() == backup.size() + 1) ? stack.peek() : null;
                 if (!basicBlock.getSub2().matchType(TYPE_LOOP_END|TYPE_LOOP_CONTINUE|TYPE_LOOP_START) && (stack.size() != backup.size())) {
                     stack.copy(backup);
                 }
                 watchdog.check(basicBlock, basicBlock.getSub2());
                 elseStatements = makeSubStatements(watchdog, basicBlock.getSub2(), statements, jumps);
-                statements.add(new IfElseStatement(condition, subStatements, elseStatements));
+                Expression value2 = (stack.size() == backup.size() + 1) ? stack.peek() : null;
+                if ((value1 != null) && (value2 != null) && subStatements.isEmpty() && elseStatements.isEmpty() && (value1.isSwitchExpression() || value2.isSwitchExpression())) {
+                    // Conditional expression with a switch expression operand
+                    stack.pop();
+                    stack.push(newTernaryOperatorExpression(basicBlock.getFirstLineNumber(), condition, value1, value2));
+                    watchdog.check(basicBlock, basicBlock.getNext());
+                    makeStatements(watchdog, basicBlock.getNext(), statements, jumps);
+                    break;
+                }
+                if ((switchExpressionDepth > 0) && (value1 != null) && (value2 != null)) {
+                    // Values yielded by both branches of an 'if' in a switch expression
+                    stack.pop();
+                    subStatements.add(new YieldStatement(value1));
+                    elseStatements.add(new YieldStatement(value2));
+                }
+                if (subStatements.isEmpty() && (condition instanceof InstanceOfExpression) && (((InstanceOfExpression)condition).getPatternVariable() != null)) {
+                    // "if (!(o instanceof Type variable)) {...}": the 'then' part only contained the pattern binding
+                    statements.add(new IfStatement(new PreOperatorExpression(condition.getLineNumber(), "!", condition), elseStatements));
+                } else {
+                    statements.add(new IfElseStatement(condition, subStatements, elseStatements));
+                }
                 watchdog.check(basicBlock, basicBlock.getNext());
                 makeStatements(watchdog, basicBlock.getNext(), statements, jumps);
                 break;
@@ -339,6 +362,10 @@ public class StatementMaker {
         Type conditionType = condition.getType();
         List<SwitchStatement.Block> blocks = switchStatement.getBlocks();
         DefaultStack<Expression> localStack = new DefaultStack<Expression>(stack);
+        // Switch expression (Java 14+): the blocks leave a value on the stack
+        boolean switchExpression = containsGotoInTernaryOperator(switchCases);
+        DefaultList<Expression> yieldValues = new DefaultList<>();
+        boolean sameStackDepth = true;
 
         switchCases.sort(SWITCH_CASE_COMPARATOR);
 
@@ -354,8 +381,26 @@ public class StatementMaker {
             Statements subStatements = new Statements();
 
             stack.copy(localStack);
-            makeStatements(watchdog, bb, subStatements, jumps);
+
+            if (switchExpression) {
+                // Each block of a switch expression has its own scope
+                switchExpressionDepth++;
+                localVariableMaker.pushFrame(subStatements);
+                makeStatements(watchdog, bb, subStatements, jumps);
+                localVariableMaker.popFrame();
+                switchExpressionDepth--;
+            } else {
+                makeStatements(watchdog, bb, subStatements, jumps);
+            }
+
             replacePreOperatorWithPostOperator(subStatements);
+
+            if (stack.size() == localStack.size() + 1) {
+                yieldValues.add(stack.pop());
+            } else {
+                sameStackDepth &= (stack.size() == localStack.size());
+                yieldValues.add(null);
+            }
 
             if (sc.isDefaultCase()) {
                 blocks.add(new SwitchStatement.LabelBlock(SwitchStatement.DEFAULT_LABEL, subStatements));
@@ -374,6 +419,7 @@ public class StatementMaker {
             }
         }
 
+        Type yieldType = makeYieldStatements(blocks, yieldValues, sameStackDepth);
         int size = statements.size();
 
         if ((size > 3) && condition.isLocalVariableReferenceExpression() && statements.get(size-2).isSwitchStatement()) {
@@ -384,7 +430,148 @@ public class StatementMaker {
             SwitchStatementMaker.makeSwitchEnum(bodyDeclaration, switchStatement);
         }
 
+        if (yieldType != null) {
+            if (statements.getLast() != switchStatement) {
+                throw new IllegalStateException("Unexpected switch expression");
+            }
+
+            // Replace the switch statement by a switch expression
+            statements.removeLast();
+            removeSyntheticDefaultBlock(blocks);
+            stack.copy(localStack);
+            stack.push(new SwitchExpression(switchStatement.getCondition().getLineNumber(), yieldType, switchStatement.getCondition(), blocks));
+        }
+
         makeStatements(watchdog, basicBlock.getNext(), statements, jumps);
+    }
+
+    /**
+     * @return true if a case of the switch ends with a value left on the stack (switch expression)
+     */
+    protected static boolean containsGotoInTernaryOperator(List<SwitchCase> switchCases) {
+        for (SwitchCase switchCase : switchCases) {
+            BasicBlock bb = switchCase.getBasicBlock();
+            WatchDog watchdog = new WatchDog();
+
+            while ((bb != null) && (bb.getIndex() >= 0)) {
+                if ((bb.getType() == TYPE_GOTO_IN_TERNARY_OPERATOR) && (bb.getNext() == SWITCH_BREAK)) {
+                    return true;
+                }
+                if (!bb.matchType(GROUP_SINGLE_SUCCESSOR)) {
+                    break;
+                }
+                watchdog.check(bb, bb.getNext());
+                bb = bb.getNext();
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Terminate the blocks of a switch expression with 'yield' statements.
+     *
+     * @return the type of the switch expression, or null for a switch statement
+     */
+    protected Type makeYieldStatements(List<SwitchStatement.Block> blocks, List<Expression> yieldValues, boolean sameStackDepth) {
+        Type yieldType = null;
+        boolean yield = false;
+
+        for (Expression yieldValue : yieldValues) {
+            if (yieldValue != null) {
+                yield = true;
+
+                if (!yieldValue.isNullExpression()) {
+                    yieldType = (yieldType == null) ? yieldValue.getType() : getCommonType(yieldType, yieldValue.getType());
+                }
+            }
+        }
+
+        if (!yield) {
+            return null;
+        }
+
+        if (yieldType == null) {
+            // Only 'null' values
+            yieldType = TYPE_UNDEFINED_OBJECT;
+        }
+
+        if (!sameStackDepth) {
+            throw new IllegalStateException("Unsupported switch expression");
+        }
+
+        for (int i=0, len=blocks.size(); i<len; i++) {
+            Statements subStatements = (Statements)blocks.get(i).getStatements();
+            Expression yieldValue = yieldValues.get(i);
+
+            if (yieldValue != null) {
+                if (!subStatements.isEmpty() && subStatements.getLast().isBreakStatement()) {
+                    subStatements.removeLast();
+                }
+                subStatements.add(new YieldStatement(yieldValue));
+            } else if (!endsWithYieldOrThrow(subStatements)) {
+                // Neither 'yield' nor 'throw': not supported
+                throw new IllegalStateException("Unsupported switch expression");
+            }
+        }
+
+        return yieldType;
+    }
+
+    protected static boolean endsWithYieldOrThrow(BaseStatement statements) {
+        if ((statements == null) || (statements.size() == 0)) {
+            return false;
+        }
+
+        Statement last = statements.getLast();
+
+        if (last.isYieldStatement() || last.isThrowStatement()) {
+            return true;
+        } else if (last.isIfElseStatement()) {
+            return endsWithYieldOrThrow(last.getStatements()) && endsWithYieldOrThrow(last.getElseStatements());
+        } else if (last.isStatements()) {
+            return endsWithYieldOrThrow(last);
+        }
+
+        return false;
+    }
+
+    /**
+     * Remove the 'default' block added by javac to exhaustive switch expressions on enums:
+     * "default -> throw new IncompatibleClassChangeError();"
+     */
+    protected static void removeSyntheticDefaultBlock(List<SwitchStatement.Block> blocks) {
+        SwitchStatement.Block defaultBlock = null;
+
+        for (SwitchStatement.Block block : blocks) {
+            if (block.isSwitchStatementLabelBlock() && (((SwitchStatement.LabelBlock)block).getLabel() == SwitchStatement.DEFAULT_LABEL)) {
+                defaultBlock = block;
+            } else if (block.isSwitchStatementLabelBlock()) {
+                SwitchStatement.Label label = ((SwitchStatement.LabelBlock)block).getLabel();
+                if (!(label instanceof SwitchStatement.ExpressionLabel) || !(((SwitchStatement.ExpressionLabel)label).getExpression() instanceof EnumConstantReferenceExpression)) {
+                    return;
+                }
+            } else {
+                for (SwitchStatement.Label label : ((SwitchStatement.MultiLabelsBlock)block).getLabels()) {
+                    if (!(label instanceof SwitchStatement.ExpressionLabel) || !(((SwitchStatement.ExpressionLabel)label).getExpression() instanceof EnumConstantReferenceExpression)) {
+                        return;
+                    }
+                }
+            }
+        }
+
+        if (defaultBlock != null) {
+            BaseStatement statements = defaultBlock.getStatements();
+
+            if ((statements.size() == 1) && statements.getFirst().isThrowStatement()) {
+                Expression expression = statements.getFirst().getExpression();
+
+                if (expression.isNewExpression() && (expression.getParameters() == null) &&
+                        "java/lang/IncompatibleClassChangeError".equals(((ObjectType)expression.getType()).getInternalName())) {
+                    blocks.remove(defaultBlock);
+                }
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -572,6 +759,10 @@ public class StatementMaker {
             Expression cond = stack.pop();
             DefaultStack<Expression> backup = new DefaultStack<Expression>(stack);
             Statements subStatements = makeSubStatements(watchdog, basicBlock.getSub1(), statements, jumps);
+            if ((switchExpressionDepth > 0) && (stack.size() == backup.size() + 1)) {
+                // Value yielded by an 'if' in a switch expression
+                subStatements.add(new YieldStatement(stack.pop()));
+            }
             if (stack.size() != backup.size()) {
                 stack.copy(backup);
             }
@@ -861,15 +1052,26 @@ public class StatementMaker {
     }
 
     protected TernaryOperatorExpression newTernaryOperatorExpression(int lineNumber, Expression condition, Expression expressionTrue, Expression expressionFalse) {
-        Type expressionTrueType = expressionTrue.getType();
-        Type expressionFalseType = expressionFalse.getType();
         Type type;
 
         if (expressionTrue.isNullExpression()) {
-            type = expressionFalseType;
+            type = expressionFalse.getType();
         } else if (expressionFalse.isNullExpression()) {
-            type = expressionTrueType;
-        } else if (expressionTrueType.equals(expressionFalseType)) {
+            type = expressionTrue.getType();
+        } else {
+            type = getCommonType(expressionTrue.getType(), expressionFalse.getType());
+        }
+
+        return new TernaryOperatorExpression(lineNumber, type, condition, expressionTrue, expressionFalse);
+    }
+
+    /**
+     * @return the type of a conditional expression whose operands have the given types
+     */
+    protected Type getCommonType(Type expressionTrueType, Type expressionFalseType) {
+        Type type;
+
+        if (expressionTrueType.equals(expressionFalseType)) {
             type = expressionTrueType;
         } else if (expressionTrueType.isPrimitiveType() && expressionFalseType.isPrimitiveType()) {
             int flags = ((PrimitiveType)expressionTrueType).getFlags() | ((PrimitiveType)expressionFalseType).getFlags();
@@ -910,7 +1112,7 @@ public class StatementMaker {
             type = TYPE_UNDEFINED_OBJECT;
         }
 
-        return new TernaryOperatorExpression(lineNumber, type, condition, expressionTrue, expressionFalse);
+        return type;
     }
 
     protected Type getTernaryOperatorExpressionType(ObjectType ot1, ObjectType ot2) {

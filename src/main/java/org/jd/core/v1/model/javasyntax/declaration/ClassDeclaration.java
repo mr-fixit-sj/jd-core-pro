@@ -14,6 +14,7 @@ import org.jd.core.v1.model.javasyntax.type.ObjectType;
 
 public class ClassDeclaration extends InterfaceDeclaration {
     protected ObjectType superType;
+    protected BaseFormalParameter recordComponents;
 
     public ClassDeclaration(int flags, String internalName, String name, BodyDeclaration bodyDeclaration) {
         super(null, flags, internalName, name, null, null, bodyDeclaration);
@@ -26,6 +27,21 @@ public class ClassDeclaration extends InterfaceDeclaration {
 
     public ObjectType getSuperType() {
         return superType;
+    }
+
+    /**
+     * @return the components of a record (Java 16+), or null if this declaration is not a record
+     */
+    public BaseFormalParameter getRecordComponents() {
+        return recordComponents;
+    }
+
+    public void setRecordComponents(BaseFormalParameter recordComponents) {
+        this.recordComponents = recordComponents;
+    }
+
+    public boolean isRecord() {
+        return recordComponents != null;
     }
 
     @Override

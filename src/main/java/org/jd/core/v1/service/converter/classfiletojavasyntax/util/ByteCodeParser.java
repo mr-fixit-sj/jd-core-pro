@@ -61,6 +61,9 @@ public class ByteCodeParser {
     private ClassFileBodyDeclaration bodyDeclaration;
     private Map<String, BaseType> typeBounds;
     private Type returnedType;
+    private boolean patternMatchingSupported;
+    // Offset of a type pattern binding sequence (ALOAD, CHECKCAST, ASTORE) -> offset of the next instruction
+    private HashMap<Integer, Integer> patternBindings;
 
     public ByteCodeParser(
             TypeMaker typeMaker, LocalVariableMaker localVariableMaker, ClassFile classFile,
@@ -68,6 +71,7 @@ public class ByteCodeParser {
         this.typeMaker = typeMaker;
         this.localVariableMaker = localVariableMaker;
         this.genericTypesSupported = (classFile.getMajorVersion() >= 49); // (majorVersion >= Java 5)
+        this.patternMatchingSupported = (classFile.getMajorVersion() >= 60); // (majorVersion >= Java 16)
         this.internalTypeName = classFile.getInternalTypeName();
         this.attributeBootstrapMethods = classFile.getAttribute("BootstrapMethods");
         this.bodyDeclaration = bodyDeclaration;
@@ -102,6 +106,16 @@ public class ByteCodeParser {
         AbstractLocalVariable localVariable;
 
         for (int offset=fromOffset; offset<toOffset; offset++) {
+            if (patternBindings != null) {
+                Integer nextOffset = patternBindings.get(offset);
+
+                if (nextOffset != null) {
+                    // Skip binding already declared by a type pattern ("instanceof Type variable")
+                    offset = nextOffset - 1;
+                    continue;
+                }
+            }
+
             int opcode = code[offset] & 255;
             int lineNumber = syntheticFlag ? Expression.UNKNOWN_LINE_NUMBER : cfg.getLineNumber(offset);
 
@@ -841,7 +855,11 @@ public class ByteCodeParser {
                     if (type1 == null) {
                         type1 = PrimitiveTypeUtil.getPrimitiveTypeFromDescriptor(typeName);
                     }
-                    stack.push(new InstanceOfExpression(lineNumber, stack.pop(), type1));
+                    InstanceOfExpression instanceOfExpression = new InstanceOfExpression(lineNumber, stack.pop(), type1);
+                    if (patternMatchingSupported && type1.isObjectType()) {
+                        parsePatternBinding(method, code, offset, statements, instanceOfExpression);
+                    }
+                    stack.push(instanceOfExpression);
                     break;
                 case 194: // MONITORENTER
                     statements.add(new ClassFileMonitorEnterStatement(stack.pop()));
@@ -971,6 +989,63 @@ public class ByteCodeParser {
         }
 
         return parameter;
+    }
+
+    /**
+     * Declare the variable of a Java 16+ type pattern ("expression instanceof Type variable") in the 'instanceof'
+     * expression and skip its binding sequence.
+     *
+     * @see PatternMatchingUtil
+     * @param offset offset of the last byte of the INSTANCEOF instruction
+     */
+    private void parsePatternBinding(Method method, byte[] code, int offset, Statements statements, InstanceOfExpression instanceOfExpression) {
+        Expression operand = instanceOfExpression.getExpression();
+
+        if (!(operand instanceof ClassFileLocalVariableReferenceExpression)) {
+            return;
+        }
+
+        AbstractLocalVariable operandLocalVariable = ((ClassFileLocalVariableReferenceExpression)operand).getLocalVariable();
+        int instanceOfOffset = offset - 2;
+        int bindingOffset = PatternMatchingUtil.searchBindingOffset(code, instanceOfOffset, operandLocalVariable.getIndex());
+
+        if ((bindingOffset == -1) || !PatternMatchingUtil.isBindingVariable(method, code, bindingOffset)) {
+            return;
+        }
+
+        int storeOffset = PatternMatchingUtil.getBindingStoreOffset(code, bindingOffset);
+        int storeIndex = ByteCodeUtil.getStoredLocalVariableIndex(code, storeOffset);
+        int nextOffset = ByteCodeUtil.getNextInstructionOffset(code, storeOffset);
+        Type type = instanceOfExpression.getInstanceOfType();
+        AbstractLocalVariable localVariable = localVariableMaker.getLocalVariableInAssignment(typeBounds, storeIndex, nextOffset, type);
+
+        if (localVariable.isDeclared()) {
+            return;
+        }
+
+        localVariable.typeOnRight(typeBounds, type);
+        localVariable.setDeclared(true);
+
+        if (!statements.isEmpty() && PatternMatchingUtil.isInlinableOperandVariable(method, code, operandLocalVariable.getIndex(), instanceOfOffset)) {
+            // javac stores a non-variable operand in a synthetic variable: inline it
+            Expression lastExpression = statements.getLast().getExpression();
+
+            if (lastExpression.isBinaryOperatorExpression() && "=".equals(lastExpression.getOperator()) &&
+                    (lastExpression.getLeftExpression() instanceof ClassFileLocalVariableReferenceExpression) &&
+                    (((ClassFileLocalVariableReferenceExpression)lastExpression.getLeftExpression()).getLocalVariable() == operandLocalVariable)) {
+                statements.removeLast();
+                instanceOfExpression.setExpression(lastExpression.getRightExpression());
+                localVariableMaker.removeLocalVariable(operandLocalVariable);
+            }
+        }
+
+        instanceOfExpression.setPatternVariable(new ClassFileLocalVariableReferenceExpression(instanceOfExpression.getLineNumber(), nextOffset, localVariable));
+
+        if (patternBindings == null) {
+            patternBindings = new HashMap<>();
+        }
+
+        patternBindings.put(bindingOffset, nextOffset);
     }
 
     private AbstractLocalVariable getLocalVariableInAssignment(int index, int offset, Expression value) {
@@ -1289,6 +1364,11 @@ public class ByteCodeParser {
         BootstrapMethod bootstrapMethod = attributeBootstrapMethods.getBootstrapMethods()[constantMemberRef.getClassIndex()];
         int[] bootstrapArguments = bootstrapMethod.getBootstrapArguments();
 
+        if ("makeConcatWithConstants".equals(indyMethodName) || "makeConcat".equals(indyMethodName)) {
+            // The descriptor gives the types of 'boolean' and 'char' operands
+            indyParameters = StringConcatenationUtil.updateOperandTypes(indyParameters, indyMethodTypes.parameterTypes);
+        }
+
         if ("makeConcatWithConstants".equals(indyMethodName)) {
             // Create Java 9+ string concatenation
             String recipe = constants.getConstantString(bootstrapArguments[0]);
@@ -1316,10 +1396,23 @@ public class ByteCodeParser {
                 if (((methodDeclaration.getFlags() & (FLAG_SYNTHETIC|FLAG_PRIVATE)) == (FLAG_SYNTHETIC|FLAG_PRIVATE)) && methodDeclaration.getMethod().getName().equals(name1) && methodDeclaration.getMethod().getDescriptor().equals(descriptor1)) {
                     // Create lambda expression
                     ClassFileMethodDeclaration cfmd = (ClassFileMethodDeclaration)methodDeclaration;
+                    List<String> parameterNames = prepareLambdaParameterNames(cfmd.getFormalParameters(), parameterCount);
+                    BaseStatement lambdaStatements = prepareLambdaStatements(cfmd.getFormalParameters(), indyParameters, cfmd.getStatements());
+
+                    if (parameterNames != null) {
+                        parameterNames = new ArrayList<>(parameterNames);
+                    }
+
+                    AttributeCode lambdaCode = cfmd.getMethod().getAttribute("Code");
+
+                    if ((lambdaCode != null) && (lambdaCode.getAttribute("LocalVariableTable") == null)) {
+                        // Generated names: avoid the names of the enclosing method
+                        int capturedCount = (indyParameters == null) ? 0 : indyParameters.size();
+                        localVariableMaker.addLambda(parameterNames, searchLambdaLocalVariables(cfmd.getFormalParameters(), capturedCount, lambdaStatements));
+                    }
                     stack.push(new LambdaIdentifiersExpression(
                             lineNumber, indyMethodTypes.returnedType, indyMethodTypes.returnedType,
-                            prepareLambdaParameterNames(cfmd.getFormalParameters(), parameterCount),
-                            prepareLambdaStatements(cfmd.getFormalParameters(), indyParameters, cfmd.getStatements())));
+                            parameterNames, lambdaStatements));
                     return;
                 }
             }
@@ -1359,6 +1452,54 @@ public class ByteCodeParser {
         }
     }
 
+    /**
+     * @return the parameters and the local variables of the synthetic method of a lambda
+     */
+    private static Set<AbstractLocalVariable> searchLambdaLocalVariables(BaseFormalParameter formalParameters, int capturedCount, BaseStatement statements) {
+        Set<AbstractLocalVariable> localVariables = new LinkedHashSet<>();
+        Set<AbstractLocalVariable> capturedVariables = new HashSet<>();
+
+        if (formalParameters != null) {
+            int index = 0;
+
+            for (FormalParameter formalParameter : formalParameters) {
+                if (formalParameter instanceof ClassFileFormalParameter) {
+                    AbstractLocalVariable lv = ((ClassFileFormalParameter)formalParameter).getLocalVariable();
+
+                    if (index < capturedCount) {
+                        // Captured variable: named after the enclosing variable
+                        capturedVariables.add(lv);
+                    } else {
+                        localVariables.add(lv);
+                    }
+                }
+                index++;
+            }
+        }
+
+        if (statements != null) {
+            statements.accept(new AbstractJavaSyntaxVisitor() {
+                @Override
+                public void visit(LocalVariableReferenceExpression expression) {
+                    if (expression instanceof ClassFileLocalVariableReferenceExpression) {
+                        localVariables.add(((ClassFileLocalVariableReferenceExpression)expression).getLocalVariable());
+                    }
+                }
+
+                @Override
+                public void visit(LocalVariableDeclarator declarator) {
+                    if (declarator instanceof ClassFileLocalVariableDeclarator) {
+                        localVariables.add(((ClassFileLocalVariableDeclarator)declarator).getLocalVariable());
+                    }
+                    super.visit(declarator);
+                }
+            });
+        }
+
+        localVariables.removeAll(capturedVariables);
+        return localVariables;
+    }
+
     private BaseStatement prepareLambdaStatements(BaseFormalParameter formalParameters, BaseExpression indyParameters, BaseStatement baseStatement) {
         if (baseStatement != null) {
             if ((formalParameters != null) && (indyParameters != null)) {
@@ -1366,31 +1507,24 @@ public class ByteCodeParser {
 
                 if ((size > 0) && (size <= formalParameters.size())) {
                     HashMap<String, String> mapping = new HashMap<>();
-                    Expression expression = indyParameters.getFirst();
+                    Iterator<FormalParameter> formalParameterIterator = formalParameters.iterator();
+                    Iterator<Expression> indyParameterIterator = indyParameters.iterator();
 
-                    if (expression.isLocalVariableReferenceExpression()) {
-                        String name = formalParameters.getFirst().getName();
-                        String newName = expression.getName();
+                    for (int i = 0; i < size; i++) {
+                        FormalParameter formalParameter = formalParameterIterator.next();
+                        Expression expression = indyParameterIterator.next();
 
-                        if (!name.equals(newName)) {
-                            mapping.put(name, newName);
-                        }
-                    }
+                        if (expression.isLocalVariableReferenceExpression()) {
+                            String name = formalParameter.getName();
+                            String newName = expression.getName();
 
-                    if (size > 1) {
-                        DefaultList<FormalParameter> formalParameterList = formalParameters.getList();
-                        DefaultList<Expression> list = indyParameters.getList();
-
-                        for (int i = 1; i < size; i++) {
-                            expression = list.get(i);
-
-                            if (expression.isLocalVariableReferenceExpression()) {
-                                String name = formalParameterList.get(i).getName();
-                                String newName = expression.getName();
-
-                                if (!name.equals(newName)) {
-                                    mapping.put(name, newName);
+                            if (newName == null) {
+                                // Captured variable not named yet (no local variable table)
+                                if ((formalParameter instanceof ClassFileFormalParameter) && (expression instanceof ClassFileLocalVariableReferenceExpression)) {
+                                    localVariableMaker.addAlias(((ClassFileFormalParameter)formalParameter).getLocalVariable(), ((ClassFileLocalVariableReferenceExpression)expression).getLocalVariable());
                                 }
+                            } else if (!name.equals(newName)) {
+                                mapping.put(name, newName);
                             }
                         }
                     }

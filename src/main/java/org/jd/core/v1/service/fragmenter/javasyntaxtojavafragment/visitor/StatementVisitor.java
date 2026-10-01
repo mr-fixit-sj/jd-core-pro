@@ -44,6 +44,7 @@ public class StatementVisitor extends ExpressionVisitor {
     public static final KeywordToken TRY = new KeywordToken("try");
     public static final KeywordToken VOLATILE = new KeywordToken("volatile");
     public static final KeywordToken WHILE = new KeywordToken("while");
+    public static final KeywordToken YIELD = new KeywordToken("yield");
 
     public StatementVisitor(Loader loader, String mainInternalTypeName, int majorVersion, ImportsFragment importsFragment) {
         super(loader, mainInternalTypeName, majorVersion, importsFragment);
@@ -526,6 +527,20 @@ public class StatementVisitor extends ExpressionVisitor {
     }
 
     @Override
+    public void visit(YieldStatement statement) {
+        tokens = new Tokens();
+        tokens.add(StartBlockToken.START_DECLARATION_OR_STATEMENT_BLOCK);
+        tokens.add(YIELD);
+        tokens.add(TextToken.SPACE);
+
+        statement.getExpression().accept(this);
+
+        tokens.add(TextToken.SEMICOLON);
+        tokens.add(EndBlockToken.END_DECLARATION_OR_STATEMENT_BLOCK);
+        fragments.addTokensFragment(tokens);
+    }
+
+    @Override
     public void visit(ThrowStatement statement) {
         tokens = new Tokens();
         tokens.add(StartBlockToken.START_DECLARATION_OR_STATEMENT_BLOCK);
@@ -580,6 +595,12 @@ public class StatementVisitor extends ExpressionVisitor {
         tokens.addLineNumberToken(expression);
 
         BaseType type = resource.getType();
+
+        if (type == null) {
+            // Java 9+: "try (variable)"
+            expression.accept(this);
+            return;
+        }
 
         type.accept(this);
         tokens.add(TextToken.SPACE);

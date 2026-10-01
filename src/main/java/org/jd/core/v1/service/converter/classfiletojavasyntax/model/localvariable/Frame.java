@@ -42,6 +42,30 @@ public class Frame {
     protected Statements statements;
     protected AbstractLocalVariable exceptionLocalVariable = null;
 
+    /**
+     * Collect the names of the local variables of this frame and its children.
+     */
+    public void collectNames(java.util.Set<String> names) {
+        for (AbstractLocalVariable lv : localVariableArray) {
+            while (lv != null) {
+                if (lv.getName() != null) {
+                    names.add(lv.getName());
+                }
+                lv = lv.getNext();
+            }
+        }
+
+        if ((exceptionLocalVariable != null) && (exceptionLocalVariable.getName() != null)) {
+            names.add(exceptionLocalVariable.getName());
+        }
+
+        if (children != null) {
+            for (Frame child : children) {
+                child.collectNames(names);
+            }
+        }
+    }
+
     public Frame(Frame parent, Statements statements) {
         this.parent = parent;
         this.statements = statements;

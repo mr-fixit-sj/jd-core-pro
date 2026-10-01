@@ -36,7 +36,11 @@ public class CompilationUnitVisitor extends StatementVisitor {
     public static final KeywordToken PACKAGE = new KeywordToken("package");
     public static final KeywordToken PRIVATE = new KeywordToken("private");
     public static final KeywordToken PROTECTED = new KeywordToken("protected");
+    public static final KeywordToken PERMITS = new KeywordToken("permits");
     public static final KeywordToken PUBLIC = new KeywordToken("public");
+    public static final KeywordToken RECORD = new KeywordToken("record");
+    public static final KeywordToken SEALED = new KeywordToken("sealed");
+    public static final KeywordToken NON_SEALED = new KeywordToken("non-sealed");
     public static final KeywordToken STATIC = new KeywordToken("static");
     public static final KeywordToken THROWS = new KeywordToken("throws");
 
@@ -213,13 +217,25 @@ public class CompilationUnitVisitor extends StatementVisitor {
         if ((declaration.getFlags() & FLAG_SYNTHETIC) == 0) {
             fragments.add(StartMovableJavaBlockFragment.START_MOVABLE_TYPE_BLOCK);
 
-            buildFragmentsForClassOrInterfaceDeclaration(declaration, declaration.getFlags(), CLASS);
+            buildFragmentsForClassOrInterfaceDeclaration(declaration, declaration.getFlags(), declaration.isRecord() ? RECORD : CLASS);
+
+            if (declaration.isRecord()) {
+                // Build tokens for record components
+                tokens.add(StartBlockToken.START_PARAMETERS_BLOCK);
+                fragments.addTokensFragment(tokens);
+                storeContext();
+                currentMethodParamNames.clear();
+                declaration.getRecordComponents().accept(this);
+                restoreContext();
+                tokens = new Tokens();
+                tokens.add(EndBlockToken.END_PARAMETERS_BLOCK);
+            }
 
             tokens.add(StartBlockToken.START_DECLARATION_OR_STATEMENT_BLOCK);
 
             // Build fragments for super type
             BaseType superType = declaration.getSuperType();
-            if ((superType != null) && !superType.equals(ObjectType.TYPE_OBJECT)) {
+            if ((superType != null) && !superType.equals(ObjectType.TYPE_OBJECT) && !declaration.isRecord()) {
                 fragments.addTokensFragment(tokens);
 
                 JavaFragmentFactory.addSpacerBeforeExtends(fragments);
@@ -249,6 +265,8 @@ public class CompilationUnitVisitor extends StatementVisitor {
 
                 tokens = new Tokens();
             }
+
+            buildFragmentsForPermittedSubtypes(declaration);
 
             tokens.add(EndBlockToken.END_DECLARATION_OR_STATEMENT_BLOCK);
             fragments.addTokensFragment(tokens);
@@ -360,7 +378,9 @@ public class CompilationUnitVisitor extends StatementVisitor {
 
                 BaseFormalParameter formalParameters = declaration.getFormalParameters();
 
-                if (formalParameters == null) {
+                if (declaration.isCompactCanonical()) {
+                    // Compact canonical constructor of a record: no parameter list
+                } else if (formalParameters == null) {
                     tokens.add(TextToken.LEFTRIGHTROUNDBRACKETS);
                 } else {
                     tokens.add(StartBlockToken.START_PARAMETERS_BLOCK);
@@ -792,6 +812,8 @@ public class CompilationUnitVisitor extends StatementVisitor {
 
                 tokens = new Tokens();
             }
+
+            buildFragmentsForPermittedSubtypes(declaration);
 
             tokens.add(EndBlockToken.END_DECLARATION_OR_STATEMENT_BLOCK);
             fragments.addTokensFragment(tokens);
@@ -1276,6 +1298,25 @@ public class CompilationUnitVisitor extends StatementVisitor {
         tokens.add(new DeclarationToken(DeclarationToken.TYPE, declaration.getInternalTypeName(), declaration.getName(), null));
     }
 
+    protected void buildFragmentsForPermittedSubtypes(InterfaceDeclaration declaration) {
+        BaseType permittedSubtypes = declaration.getPermittedSubtypes();
+
+        if (permittedSubtypes != null) {
+            if (!tokens.isEmpty())
+                fragments.addTokensFragment(tokens);
+
+            JavaFragmentFactory.addSpacerBeforeImplements(fragments);
+
+            tokens = new Tokens();
+            tokens.add(PERMITS);
+            tokens.add(TextToken.SPACE);
+            permittedSubtypes.accept(this);
+            fragments.addTokensFragment(tokens);
+
+            tokens = new Tokens();
+        }
+    }
+
     protected void buildFragmentsForClassOrInterfaceDeclaration(InterfaceDeclaration declaration, int flags, KeywordToken keyword) {
         buildFragmentsForTypeDeclaration(declaration, flags, keyword);
 
@@ -1312,6 +1353,14 @@ public class CompilationUnitVisitor extends StatementVisitor {
         }
         if ((flags & FLAG_ABSTRACT) != 0) {
             tokens.add(ABSTRACT);
+            tokens.add(TextToken.SPACE);
+        }
+        if ((flags & FLAG_SEALED) != 0) {
+            tokens.add(SEALED);
+            tokens.add(TextToken.SPACE);
+        }
+        if ((flags & FLAG_NON_SEALED) != 0) {
+            tokens.add(NON_SEALED);
             tokens.add(TextToken.SPACE);
         }
         if ((flags & FLAG_SYNTHETIC) != 0) {

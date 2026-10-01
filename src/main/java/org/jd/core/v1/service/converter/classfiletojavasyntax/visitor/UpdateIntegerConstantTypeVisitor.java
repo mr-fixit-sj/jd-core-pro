@@ -448,8 +448,41 @@ public class UpdateIntegerConstantTypeVisitor extends AbstractJavaSyntaxVisitor 
             return expression;
         }
 
+        if (type.isPrimitiveType() && expression.isSwitchExpression()) {
+            ((SwitchExpression) expression).setType(type);
+        }
+
         expression.accept(this);
         return expression;
+    }
+
+    @Override
+    public void visit(SwitchExpression expression) {
+        Type type = expression.getType();
+
+        expression.getCondition().accept(this);
+
+        for (SwitchStatement.Block block : expression.getBlocks()) {
+            BaseStatement statements = block.getStatements();
+            Statement last = statements.getLast();
+
+            statements.accept(this);
+
+            if (last.isYieldStatement()) {
+                YieldStatement yieldStatement = (YieldStatement) last;
+
+                if (type == TYPE_BOOLEAN) {
+                    yieldStatement.setExpression(updateBooleanExpression(yieldStatement.getExpression()));
+                } else if (type.isPrimitiveType()) {
+                    yieldStatement.setExpression(updateExpression(type, yieldStatement.getExpression()));
+                }
+            }
+        }
+    }
+
+    @Override
+    public void visit(YieldStatement statement) {
+        // Updated by visit(SwitchExpression)
     }
 
     protected Expression safeUpdateBooleanExpression(Expression expression) {
@@ -460,6 +493,8 @@ public class UpdateIntegerConstantTypeVisitor extends AbstractJavaSyntaxVisitor 
         if (TYPE_BOOLEAN != expression.getType()) {
             if (expression.isIntegerConstantExpression()) {
                 return new BooleanExpression(expression.getLineNumber(), expression.getIntegerValue()!=0);
+            } else if (expression.isSwitchExpression()) {
+                ((SwitchExpression) expression).setType(TYPE_BOOLEAN);
             } else if (expression.isTernaryOperatorExpression()) {
                 TernaryOperatorExpression toe = (TernaryOperatorExpression) expression;
 

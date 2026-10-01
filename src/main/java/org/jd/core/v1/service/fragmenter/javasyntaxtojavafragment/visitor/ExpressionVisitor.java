@@ -16,6 +16,8 @@ import org.jd.core.v1.model.javasyntax.declaration.BodyDeclaration;
 import org.jd.core.v1.model.javasyntax.declaration.FormalParameter;
 import org.jd.core.v1.model.javasyntax.expression.*;
 import org.jd.core.v1.model.javasyntax.statement.BaseStatement;
+import org.jd.core.v1.model.javasyntax.statement.Statement;
+import org.jd.core.v1.model.javasyntax.statement.SwitchStatement;
 import org.jd.core.v1.model.javasyntax.type.*;
 import org.jd.core.v1.model.token.*;
 import org.jd.core.v1.service.fragmenter.javasyntaxtojavafragment.util.CharacterUtil;
@@ -23,6 +25,7 @@ import org.jd.core.v1.service.fragmenter.javasyntaxtojavafragment.util.JavaFragm
 import org.jd.core.v1.service.fragmenter.javasyntaxtojavafragment.util.StringUtil;
 import org.jd.core.v1.util.DefaultList;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -247,6 +250,11 @@ public class ExpressionVisitor extends TypeVisitor {
         BaseType type = expression.getInstanceOfType();
 
         type.accept(this);
+
+        if (expression.getPatternVariable() != null) {
+            tokens.add(TextToken.SPACE);
+            expression.getPatternVariable().accept(this);
+        }
     }
 
     @Override
@@ -313,6 +321,109 @@ public class ExpressionVisitor extends TypeVisitor {
         }
 
         visitLambdaBody(expression.getStatements());
+    }
+
+    @Override
+    public void visit(SwitchExpression expression) {
+        boolean ief = inExpressionFlag;
+
+        tokens.add(StatementVisitor.SWITCH);
+        tokens.add(TextToken.SPACE);
+        tokens.add(StartBlockToken.START_PARAMETERS_BLOCK);
+        inExpressionFlag = false;
+        expression.getCondition().accept(this);
+        tokens.add(EndBlockToken.END_PARAMETERS_BLOCK);
+        tokens.add(TextToken.SPACE);
+        fragments.addTokensFragment(tokens);
+
+        StartBlockFragment start = JavaFragmentFactory.addStartStatementsInLambdaBlock(fragments);
+        Iterator<SwitchStatement.Block> iterator = expression.getBlocks().iterator();
+
+        while (iterator.hasNext()) {
+            visitSwitchExpressionBlock(iterator.next());
+
+            if (iterator.hasNext()) {
+                JavaFragmentFactory.addSpacerBetweenStatements(fragments);
+            }
+        }
+
+        if (ief) {
+            JavaFragmentFactory.addEndStatementsInLambdaBlockInParameter(fragments, start);
+        } else {
+            JavaFragmentFactory.addEndStatementsInLambdaBlock(fragments, start);
+        }
+
+        tokens = new Tokens();
+        inExpressionFlag = ief;
+    }
+
+    /**
+     * Print a block of a switch expression with the arrow form: "case A, B -> value;", "case C -> throw ...;" or
+     * "case D -> { ... }"
+     */
+    protected void visitSwitchExpressionBlock(SwitchStatement.Block block) {
+        tokens = new Tokens();
+        tokens.add(StartBlockToken.START_DECLARATION_OR_STATEMENT_BLOCK);
+
+        List<SwitchStatement.Label> labels;
+
+        if (block.isSwitchStatementLabelBlock()) {
+            labels = Collections.singletonList(((SwitchStatement.LabelBlock)block).getLabel());
+        } else {
+            labels = ((SwitchStatement.MultiLabelsBlock)block).getLabels();
+        }
+
+        if ((labels.size() == 1) && (labels.get(0) == SwitchStatement.DEFAULT_LABEL)) {
+            tokens.add(StatementVisitor.DEFAULT);
+        } else {
+            tokens.add(StatementVisitor.CASE);
+            tokens.add(TextToken.SPACE);
+
+            Iterator<SwitchStatement.Label> iterator = labels.iterator();
+
+            while (iterator.hasNext()) {
+                SwitchStatement.Label label = iterator.next();
+
+                if (label == SwitchStatement.DEFAULT_LABEL) {
+                    tokens.add(StatementVisitor.DEFAULT);
+                } else {
+                    ((SwitchStatement.ExpressionLabel)label).getExpression().accept(this);
+                }
+
+                if (iterator.hasNext()) {
+                    tokens.add(TextToken.COMMA_SPACE);
+                }
+            }
+        }
+
+        tokens.add(TextToken.SPACE_ARROW_SPACE);
+
+        BaseStatement statements = block.getStatements();
+
+        if ((statements.size() == 1) && (statements.getFirst().isYieldStatement() || statements.getFirst().isThrowStatement())) {
+            Statement statement = statements.getFirst();
+
+            if (statement.isThrowStatement()) {
+                tokens.add(StatementVisitor.THROW);
+                tokens.add(TextToken.SPACE);
+            }
+
+            statement.getExpression().accept(this);
+            tokens.add(TextToken.SEMICOLON);
+            tokens.add(EndBlockToken.END_DECLARATION_OR_STATEMENT_BLOCK);
+            fragments.addTokensFragment(tokens);
+        } else {
+            tokens.add(EndBlockToken.END_DECLARATION_OR_STATEMENT_BLOCK);
+            fragments.addTokensFragment(tokens);
+
+            StartBlockFragment start = JavaFragmentFactory.addStartStatementsInLambdaBlock(fragments);
+
+            tokens = new Tokens();
+            statements.accept(this);
+            JavaFragmentFactory.addEndStatementsInLambdaBlock(fragments, start);
+        }
+
+        tokens = new Tokens();
     }
 
     protected void visitLambdaBody(BaseStatement statementList) {
@@ -737,6 +848,7 @@ public class ExpressionVisitor extends TypeVisitor {
         @Override public void visit(InstanceOfExpression expression) { ExpressionVisitor.this.visit(expression); }
         @Override public void visit(LambdaFormalParametersExpression expression) { ExpressionVisitor.this.visit(expression); }
         @Override public void visit(LambdaIdentifiersExpression expression) { ExpressionVisitor.this.visit(expression); }
+        @Override public void visit(SwitchExpression expression) { ExpressionVisitor.this.visit(expression); }
         @Override public void visit(LengthExpression expression) { ExpressionVisitor.this.visit(expression); }
         @Override public void visit(LocalVariableReferenceExpression expression) { ExpressionVisitor.this.visit(expression); }
         @Override public void visit(MethodInvocationExpression expression) { ExpressionVisitor.this.visit(expression); }

@@ -320,6 +320,24 @@ public class ClassFileDeserializer {
                     case "RuntimeVisibleParameterAnnotations":
                         attributes.put(name, new AttributeParameterAnnotations(loadParameterAnnotations(reader, constants)));
                         break;
+                    case "PermittedSubclasses":
+                        int classCount = reader.readUnsignedShort();
+                        String[] classNames = new String[classCount];
+                        for (int j=0; j<classCount; j++) {
+                            classNames[j] = constants.getConstantTypeName(reader.readUnsignedShort());
+                        }
+                        attributes.put(name, new AttributePermittedSubclasses(classNames));
+                        break;
+                    case "Record":
+                        int componentCount = reader.readUnsignedShort();
+                        RecordComponent[] components = new RecordComponent[componentCount];
+                        for (int j=0; j<componentCount; j++) {
+                            String componentName = constants.getConstantUtf8(reader.readUnsignedShort());
+                            String componentDescriptor = constants.getConstantUtf8(reader.readUnsignedShort());
+                            components[j] = new RecordComponent(componentName, componentDescriptor, loadAttributes(reader, constants));
+                        }
+                        attributes.put(name, new AttributeRecord(components));
+                        break;
                     case "Signature":
                         if (attributeLength != 2)
                             throw new ClassFileFormatException("Invalid attribute length");
@@ -577,8 +595,8 @@ public class ClassFileDeserializer {
 
         for (int i=0; i<count; i++) {
             int nameIndex = reader.readUnsignedShort();
-
-            String name = constants.getConstantUtf8(nameIndex);
+            // A zero index denotes a formal parameter with no name (emitted by javac since JDK 21)
+            String name = (nameIndex == 0) ? null : constants.getConstantUtf8(nameIndex);
 
             parameters[i] = new MethodParameter(name, reader.readUnsignedShort());
         }

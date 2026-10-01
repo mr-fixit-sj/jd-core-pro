@@ -264,6 +264,7 @@ public abstract class AbstractJavaSyntaxVisitor extends AbstractTypeArgumentVisi
 
         type.accept(this);
         expression.getExpression().accept(this);
+        safeAccept(expression.getPatternVariable());
     }
 
     @Override
@@ -387,6 +388,12 @@ public abstract class AbstractJavaSyntaxVisitor extends AbstractTypeArgumentVisi
         BaseType type = expression.getType();
 
         type.accept(this);
+    }
+
+    @Override
+    public void visit(SwitchExpression expression) {
+        expression.getCondition().accept(this);
+        acceptListStatement(expression.getBlocks());
     }
 
     @Override
@@ -582,6 +589,11 @@ public abstract class AbstractJavaSyntaxVisitor extends AbstractTypeArgumentVisi
     }
 
     @Override
+    public void visit(YieldStatement statement) {
+        statement.getExpression().accept(this);
+    }
+
+    @Override
     public void visit(TryStatement statement) {
         safeAcceptListStatement(statement.getResources());
         statement.getTryStatements().accept(this);
@@ -601,7 +613,9 @@ public abstract class AbstractJavaSyntaxVisitor extends AbstractTypeArgumentVisi
     public void visit(TryStatement.Resource statement) {
         BaseType type = statement.getType();
 
-        type.accept(this);
+        if (type != null) {
+            type.accept(this);
+        }
         statement.getExpression().accept(this);
     }
 
