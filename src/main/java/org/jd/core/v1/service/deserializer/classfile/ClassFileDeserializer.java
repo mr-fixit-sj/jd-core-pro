@@ -577,8 +577,8 @@ public class ClassFileDeserializer {
 
         for (int i=0; i<count; i++) {
             int nameIndex = reader.readUnsignedShort();
-
-            String name = constants.getConstantUtf8(nameIndex);
+            // A zero index denotes a formal parameter with no name (emitted by javac since JDK 21)
+            String name = (nameIndex == 0) ? null : constants.getConstantUtf8(nameIndex);
 
             parameters[i] = new MethodParameter(name, reader.readUnsignedShort());
         }

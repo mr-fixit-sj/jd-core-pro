@@ -26,7 +26,14 @@ public class CompilerUtil {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         StringWriter writer = new StringWriter();
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        List<String> options = Arrays.asList("-source", javaVersion, "-target", javaVersion, "-d", DESTINATION_DIRECTORY_PATH, "-cp", System.getProperty("java.class.path"));
+        List<String> options;
+
+        if (parseJavaVersion(System.getProperty("java.version")) <= 8) {
+            options = Arrays.asList("-source", javaVersion, "-target", javaVersion, "-d", DESTINATION_DIRECTORY_PATH, "-cp", System.getProperty("java.class.path"));
+        } else {
+            // Compile against the API of the requested Java version, not the one of the running JDK
+            options = Arrays.asList("--release", String.valueOf(parseJavaVersion(javaVersion)), "-d", DESTINATION_DIRECTORY_PATH, "-cp", System.getProperty("java.class.path"));
+        }
         List<JavaFileObject> compilationUnits = Arrays.asList(javaFileObjects);
 
         try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null, null)) {
@@ -66,10 +73,12 @@ public class CompilerUtil {
         if (numericSystemJavaVersion <= 8) {
             return preferredJavaVersion;
         } else {
+            // Oldest source level accepted by the running compiler: 6 up to JDK 11, 7 up to JDK 19, 8 since JDK 20
+            int oldestSupportedJavaVersion = (numericSystemJavaVersion >= 20) ? 8 : (numericSystemJavaVersion >= 12) ? 7 : 6;
             int numericPreferredJavaVersion = parseJavaVersion(preferredJavaVersion);
 
-            if (numericPreferredJavaVersion < 6) {
-                return "1.6";
+            if (numericPreferredJavaVersion < oldestSupportedJavaVersion) {
+                return "1." + oldestSupportedJavaVersion;
             } else {
                 return preferredJavaVersion;
             }
