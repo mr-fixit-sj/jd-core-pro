@@ -596,6 +596,12 @@ public class StatementVisitor extends ExpressionVisitor {
 
         BaseType type = resource.getType();
 
+        if (type == null) {
+            // Java 9+: "try (variable)"
+            expression.accept(this);
+            return;
+        }
+
         type.accept(this);
         tokens.add(TextToken.SPACE);
         tokens.add(newTextToken(resource.getName()));
