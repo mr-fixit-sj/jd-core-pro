@@ -391,6 +391,12 @@ public abstract class AbstractJavaSyntaxVisitor extends AbstractTypeArgumentVisi
     }
 
     @Override
+    public void visit(SwitchExpression expression) {
+        expression.getCondition().accept(this);
+        acceptListStatement(expression.getBlocks());
+    }
+
+    @Override
     public void visit(TernaryOperatorExpression expression) {
         expression.getCondition().accept(this);
         expression.getTrueExpression().accept(this);
@@ -579,6 +585,11 @@ public abstract class AbstractJavaSyntaxVisitor extends AbstractTypeArgumentVisi
 
     @Override
     public void visit(ThrowStatement statement) {
+        statement.getExpression().accept(this);
+    }
+
+    @Override
+    public void visit(YieldStatement statement) {
         statement.getExpression().accept(this);
     }
 

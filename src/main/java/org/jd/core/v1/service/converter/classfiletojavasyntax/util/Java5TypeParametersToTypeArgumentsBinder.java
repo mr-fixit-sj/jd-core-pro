@@ -8,6 +8,8 @@
 package org.jd.core.v1.service.converter.classfiletojavasyntax.util;
 
 import org.jd.core.v1.model.javasyntax.expression.*;
+import org.jd.core.v1.model.javasyntax.statement.Statement;
+import org.jd.core.v1.model.javasyntax.statement.SwitchStatement;
 import org.jd.core.v1.model.javasyntax.type.*;
 import org.jd.core.v1.service.converter.classfiletojavasyntax.model.javasyntax.declaration.ClassFileConstructorOrMethodDeclaration;
 import org.jd.core.v1.service.converter.classfiletojavasyntax.model.javasyntax.expression.*;
@@ -575,6 +577,22 @@ public class Java5TypeParametersToTypeArgumentsBinder extends AbstractTypeParame
 
         type = expression.getType();
         expression.getExpression().accept(this);
+    }
+
+    @Override
+    public void visit(SwitchExpression expression) {
+        Type t = type;
+
+        expression.setType(t);
+
+        for (SwitchStatement.Block block : expression.getBlocks()) {
+            Statement last = block.getStatements().getLast();
+
+            if (last.isYieldStatement()) {
+                type = t;
+                last.getExpression().accept(this);
+            }
+        }
     }
 
     @Override

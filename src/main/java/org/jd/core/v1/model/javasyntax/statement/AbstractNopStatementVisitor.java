@@ -33,6 +33,7 @@ public abstract class AbstractNopStatementVisitor implements StatementVisitor {
     @Override public void visit(SwitchStatement.MultiLabelsBlock statement) {}
     @Override public void visit(SynchronizedStatement statement) {}
     @Override public void visit(ThrowStatement statement) {}
+    @Override public void visit(YieldStatement statement) {}
     @Override public void visit(TryStatement statement) {}
     @Override public void visit(TryStatement.CatchClause statement) {}
     @Override public void visit(TryStatement.Resource statement) {}

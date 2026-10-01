@@ -615,6 +615,20 @@ public class ControlFlowGraphReducer {
             }
         }
 
+        if ((end == END) && endsWithSwitchBreak(lastSwitchCaseBasicBlock)) {
+            // Nested switch: all the cases jump to the end of the enclosing switch (javac chains the jumps)
+            boolean reduced = true;
+
+            for (SwitchCase switchCase : basicBlock.getSwitchCases()) {
+                reduced &= reduce(visited, switchCase.getBasicBlock(), jsrTargets);
+            }
+
+            basicBlock.setType(TYPE_SWITCH);
+            basicBlock.setNext(SWITCH_BREAK);
+
+            return reduced;
+        }
+
         if (end == END) {
             if ((lastSC.getBasicBlock() == lastSwitchCaseBasicBlock) && searchLoopStart(basicBlock, maxOffset)) {
                 replaceLoopStartWithSwitchBreak(new BitSet(), basicBlock);
@@ -686,6 +700,17 @@ public class ControlFlowGraphReducer {
         endPredecessors.add(basicBlock);
 
         return reduced & reduce(visited, basicBlock.getNext(), jsrTargets);
+    }
+
+    protected static boolean endsWithSwitchBreak(BasicBlock basicBlock) {
+        WatchDog watchdog = new WatchDog();
+
+        while ((basicBlock != null) && basicBlock.matchType(TYPE_STATEMENTS|TYPE_GOTO|TYPE_GOTO_IN_TERNARY_OPERATOR)) {
+            watchdog.check(basicBlock, basicBlock.getNext());
+            basicBlock = basicBlock.getNext();
+        }
+
+        return basicBlock == SWITCH_BREAK;
     }
 
     protected static boolean searchLoopStart(BasicBlock basicBlock, int maxOffset) {

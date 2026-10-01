@@ -36,6 +36,7 @@ public interface BaseStatement extends Base<Statement> {
     default boolean isSwitchStatement() { return false; }
     default boolean isSwitchStatementLabelBlock() { return false; }
     default boolean isSwitchStatementMultiLabelsBlock() { return false; }
+    default boolean isYieldStatement() { return false; }
     default boolean isThrowStatement() { return false; }
     default boolean isTryStatement() { return false; }
     default boolean isWhileStatement() { return false; }
