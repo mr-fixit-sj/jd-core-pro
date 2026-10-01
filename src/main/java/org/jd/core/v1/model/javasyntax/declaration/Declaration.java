@@ -36,6 +36,8 @@ public interface Declaration {
 
     // Extension
     int FLAG_DEFAULT      = 0x10000; // .  .  M  .  .  .  .  .
+    int FLAG_SEALED       = 0x20000; // C  .  .  N  .  .  .  . // Custom flag (Java 17)
+    int FLAG_NON_SEALED   = 0x40000; // C  .  .  N  .  .  .  . // Custom flag (Java 17)
 
     void accept(DeclarationVisitor visitor);
 }

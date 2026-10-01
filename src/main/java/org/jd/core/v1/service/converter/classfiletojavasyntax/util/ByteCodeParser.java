@@ -1364,6 +1364,11 @@ public class ByteCodeParser {
         BootstrapMethod bootstrapMethod = attributeBootstrapMethods.getBootstrapMethods()[constantMemberRef.getClassIndex()];
         int[] bootstrapArguments = bootstrapMethod.getBootstrapArguments();
 
+        if ("makeConcatWithConstants".equals(indyMethodName) || "makeConcat".equals(indyMethodName)) {
+            // The descriptor gives the types of 'boolean' and 'char' operands
+            indyParameters = StringConcatenationUtil.updateOperandTypes(indyParameters, indyMethodTypes.parameterTypes);
+        }
+
         if ("makeConcatWithConstants".equals(indyMethodName)) {
             // Create Java 9+ string concatenation
             String recipe = constants.getConstantString(bootstrapArguments[0]);

@@ -64,6 +64,7 @@ public class TypeMaker {
     private HashMap<Long, ObjectType> superParameterizedObjectTypes = new HashMap<>(1024);
 
     private HashMap<String, String[]> hierarchy = new HashMap<>(1024);
+    private HashMap<String, String[]> permittedSubclasses = new HashMap<>();
     private ClassPathLoader classPathLoader = new ClassPathLoader();
     private Loader loader;
 
@@ -1027,6 +1028,73 @@ public class TypeMaker {
 
         assignableRawTypes.put(key, Boolean.FALSE);
         return false;
+    }
+
+    /**
+     * @return true if 'superTypeName' is a sealed type (Java 17+) permitting 'internalTypeName'
+     */
+    public boolean isPermittedSubclass(String superTypeName, String internalTypeName) {
+        if (!permittedSubclasses.containsKey(superTypeName)) {
+            permittedSubclasses.put(superTypeName, loadPermittedSubclasses(superTypeName));
+        }
+
+        String[] classNames = permittedSubclasses.get(superTypeName);
+
+        if (classNames != null) {
+            for (String className : classNames) {
+                if (className.equals(internalTypeName)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private String[] loadPermittedSubclasses(String internalTypeName) {
+        try {
+            byte[] data = null;
+
+            if (loader.canLoad(internalTypeName)) {
+                data = loader.load(internalTypeName);
+            } else if (classPathLoader.canLoad(internalTypeName)) {
+                data = classPathLoader.load(internalTypeName);
+            }
+
+            if (data != null) {
+                ClassFileReader reader = new ClassFileReader(data);
+                Object[] constants = loadClassFile(internalTypeName, reader);
+
+                // Skip fields & methods
+                skipMembers(reader);
+                skipMembers(reader);
+
+                int count = reader.readUnsignedShort();
+
+                for (int j=0; j<count; j++) {
+                    int attributeNameIndex = reader.readUnsignedShort();
+                    int attributeLength = reader.readInt();
+
+                    if ("PermittedSubclasses".equals(constants[attributeNameIndex])) {
+                        int classCount = reader.readUnsignedShort();
+                        String[] classNames = new String[classCount];
+
+                        for (int k=0; k<classCount; k++) {
+                            Integer cc = (Integer)constants[reader.readUnsignedShort()];
+                            classNames[k] = (String)constants[cc.intValue()];
+                        }
+
+                        return classNames;
+                    } else {
+                        reader.skip(attributeLength);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            assert ExceptionUtil.printStackTrace(e);
+        }
+
+        return null;
     }
 
     public TypeTypes makeTypeTypes(String internalTypeName) {

@@ -8,7 +8,10 @@
 package org.jd.core.v1.service.converter.classfiletojavasyntax.util;
 
 import org.jd.core.v1.model.javasyntax.expression.*;
+import org.jd.core.v1.model.javasyntax.type.BaseType;
 import org.jd.core.v1.model.javasyntax.type.ObjectType;
+import org.jd.core.v1.model.javasyntax.type.PrimitiveType;
+import org.jd.core.v1.model.javasyntax.type.Type;
 import org.jd.core.v1.service.converter.classfiletojavasyntax.model.javasyntax.expression.ClassFileMethodInvocationExpression;
 import org.jd.core.v1.service.converter.classfiletojavasyntax.model.javasyntax.expression.ClassFileNewExpression;
 import org.jd.core.v1.util.DefaultList;
@@ -116,6 +119,50 @@ public class StringConcatenationUtil {
 
                 return expression;
         }
+    }
+
+    /**
+     * Type the operands of a Java 9+ string concatenation with the parameter types of the invokedynamic
+     * descriptor: "c ? 1 : 0" passed as a 'boolean' is "c", 120 passed as a 'char' is 'x'.
+     */
+    public static BaseExpression updateOperandTypes(BaseExpression parameters, BaseType parameterTypes) {
+        if ((parameters == null) || (parameterTypes == null) || (parameters.size() != parameterTypes.size())) {
+            return parameters;
+        }
+
+        if (parameters.isList()) {
+            DefaultList<Expression> list = parameters.getList();
+            Iterator<Type> typeIterator = parameterTypes.getList().iterator();
+
+            for (int i=0, len=list.size(); i<len; i++) {
+                list.set(i, updateOperandType(list.get(i), typeIterator.next()));
+            }
+
+            return parameters;
+        } else {
+            return updateOperandType(parameters.getFirst(), parameterTypes.getFirst());
+        }
+    }
+
+    private static Expression updateOperandType(Expression expression, Type type) {
+        if ((type != PrimitiveType.TYPE_BOOLEAN) && (type != PrimitiveType.TYPE_CHAR)) {
+            return expression;
+        }
+
+        if (expression.isIntegerConstantExpression()) {
+            if (type == PrimitiveType.TYPE_BOOLEAN) {
+                return new BooleanExpression(expression.getLineNumber(), expression.getIntegerValue() != 0);
+            }
+            ((IntegerConstantExpression)expression).setType(type);
+        } else if (expression.isTernaryOperatorExpression()) {
+            TernaryOperatorExpression toe = (TernaryOperatorExpression)expression;
+
+            toe.setType(type);
+            toe.setTrueExpression(updateOperandType(toe.getTrueExpression(), type));
+            toe.setFalseExpression(updateOperandType(toe.getFalseExpression(), type));
+        }
+
+        return expression;
     }
 
     private static boolean isString(Expression expression) {

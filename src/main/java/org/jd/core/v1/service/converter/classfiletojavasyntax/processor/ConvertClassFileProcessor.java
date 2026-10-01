@@ -84,10 +84,13 @@ public class ConvertClassFileProcessor implements Processor {
         TypeMaker.TypeTypes typeTypes = parser.parseClassFileSignature(classFile);
         ClassFileBodyDeclaration bodyDeclaration = convertBodyDeclaration(parser, converter, classFile, typeTypes.typeParameters, outerClassFileBodyDeclaration);
 
-        return new ClassFileInterfaceDeclaration(
+        ClassFileInterfaceDeclaration declaration = new ClassFileInterfaceDeclaration(
                 annotationReferences, classFile.getAccessFlags(),
                 typeTypes.thisType.getInternalName(), typeTypes.thisType.getName(),
                 typeTypes.typeParameters, typeTypes.interfaces, bodyDeclaration);
+
+        convertSealedDeclaration(parser, classFile, declaration);
+        return declaration;
     }
 
     protected ClassFileEnumDeclaration convertEnumDeclaration(TypeMaker parser, AnnotationConverter converter, ClassFile classFile, ClassFileBodyDeclaration outerClassFileBodyDeclaration) {
@@ -117,11 +120,81 @@ public class ConvertClassFileProcessor implements Processor {
         TypeMaker.TypeTypes typeTypes = parser.parseClassFileSignature(classFile);
         ClassFileBodyDeclaration bodyDeclaration = convertBodyDeclaration(parser, converter, classFile, typeTypes.typeParameters, outerClassFileBodyDeclaration);
 
-        return new ClassFileClassDeclaration(
+        ClassFileClassDeclaration declaration = new ClassFileClassDeclaration(
                 annotationReferences, classFile.getAccessFlags(),
                 typeTypes.thisType.getInternalName(), typeTypes.thisType.getName(),
                 typeTypes.typeParameters, typeTypes.superType,
                 typeTypes.interfaces, bodyDeclaration);
+
+        convertSealedDeclaration(parser, classFile, declaration);
+        convertRecordComponents(parser, converter, classFile, declaration);
+        return declaration;
+    }
+
+    /**
+     * Sealed classes and interfaces (Java 17+): 'sealed' and 'permits', or 'non-sealed' for a non-final direct
+     * subtype of a sealed type.
+     */
+    protected void convertSealedDeclaration(TypeMaker parser, ClassFile classFile, InterfaceDeclaration declaration) {
+        AttributePermittedSubclasses attributePermittedSubclasses = classFile.getAttribute("PermittedSubclasses");
+        int flags = declaration.getFlags();
+
+        if (attributePermittedSubclasses != null) {
+            String[] classNames = attributePermittedSubclasses.getClassNames();
+
+            if (classNames.length == 1) {
+                declaration.setPermittedSubtypes(parser.makeFromInternalTypeName(classNames[0]));
+            } else {
+                Types types = new Types(classNames.length);
+
+                for (String className : classNames) {
+                    types.add(parser.makeFromInternalTypeName(className));
+                }
+
+                declaration.setPermittedSubtypes(types);
+            }
+
+            declaration.setFlags(flags | Declaration.FLAG_SEALED);
+        } else if (((flags & Declaration.FLAG_FINAL) == 0) && (classFile.getMajorVersion() >= 61)) { // (majorVersion >= Java 17)
+            String internalTypeName = classFile.getInternalTypeName();
+            String superTypeName = classFile.getSuperTypeName();
+            boolean nonSealed = (superTypeName != null) && parser.isPermittedSubclass(superTypeName, internalTypeName);
+
+            if (!nonSealed && (classFile.getInterfaceTypeNames() != null)) {
+                for (String interfaceTypeName : classFile.getInterfaceTypeNames()) {
+                    if (parser.isPermittedSubclass(interfaceTypeName, internalTypeName)) {
+                        nonSealed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (nonSealed) {
+                declaration.setFlags(flags | Declaration.FLAG_NON_SEALED);
+            }
+        }
+    }
+
+    /**
+     * Records (Java 16+): the record components.
+     */
+    protected void convertRecordComponents(TypeMaker parser, AnnotationConverter converter, ClassFile classFile, ClassDeclaration declaration) {
+        AttributeRecord attributeRecord = classFile.getAttribute("Record");
+
+        if ((attributeRecord != null) && "java/lang/Record".equals(classFile.getSuperTypeName())) {
+            FormalParameters components = new FormalParameters();
+
+            for (RecordComponent component : attributeRecord.getComponents()) {
+                AttributeSignature attributeSignature = component.getAttribute("Signature");
+                Type type = parser.makeFromSignature((attributeSignature == null) ? component.getDescriptor() : attributeSignature.getSignature());
+                Annotations visibles = component.getAttribute("RuntimeVisibleAnnotations");
+                Annotations invisibles = component.getAttribute("RuntimeInvisibleAnnotations");
+
+                components.add(new FormalParameter(converter.convert(visibles, invisibles), type, false, component.getName()));
+            }
+
+            declaration.setRecordComponents(components);
+        }
     }
 
     protected ClassFileBodyDeclaration convertBodyDeclaration(TypeMaker parser, AnnotationConverter converter, ClassFile classFile, BaseTypeParameter typeParameters, ClassFileBodyDeclaration outerClassFileBodyDeclaration) {

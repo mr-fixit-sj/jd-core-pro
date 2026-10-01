@@ -22,6 +22,7 @@ public class ConstructorDeclaration implements MemberDeclaration {
     protected BaseType exceptionTypes;
     protected String descriptor;
     protected BaseStatement statements;
+    protected boolean compactCanonical;
 
     public ConstructorDeclaration(int flags, BaseFormalParameter formalParameters, String descriptor, BaseStatement statements) {
         this.flags = flags;
@@ -38,6 +39,17 @@ public class ConstructorDeclaration implements MemberDeclaration {
         this.exceptionTypes = exceptionTypes;
         this.descriptor = descriptor;
         this.statements = statements;
+    }
+
+    /**
+     * @return true for the compact canonical constructor of a record: "Name { ... }"
+     */
+    public boolean isCompactCanonical() {
+        return compactCanonical;
+    }
+
+    public void setCompactCanonical(boolean compactCanonical) {
+        this.compactCanonical = compactCanonical;
     }
 
     public int getFlags() {

@@ -11,6 +11,7 @@ import org.jd.core.v1.model.javasyntax.AbstractJavaSyntaxVisitor;
 import org.jd.core.v1.model.javasyntax.declaration.*;
 import org.jd.core.v1.service.converter.classfiletojavasyntax.model.javasyntax.declaration.ClassFileBodyDeclaration;
 import org.jd.core.v1.service.converter.classfiletojavasyntax.model.javasyntax.declaration.ClassFileEnumDeclaration;
+import org.jd.core.v1.service.converter.classfiletojavasyntax.util.RecordDeclarationUtil;
 import org.jd.core.v1.service.converter.classfiletojavasyntax.util.TypeMaker;
 
 public class UpdateJavaSyntaxTreeStep2Visitor extends AbstractJavaSyntaxVisitor {
@@ -54,6 +55,10 @@ public class UpdateJavaSyntaxTreeStep2Visitor extends AbstractJavaSyntaxVisitor 
         initStaticFieldVisitor.visit(declaration);
         initInstanceFieldVisitor.visit(declaration);
         removeDefaultConstructorVisitor.visit(declaration);
+
+        if ((typeDeclaration instanceof ClassDeclaration) && ((ClassDeclaration)typeDeclaration).isRecord()) {
+            RecordDeclarationUtil.update((ClassDeclaration)typeDeclaration, bodyDeclaration);
+        }
         AGGREGATE_FIELDS_VISITOR.visit(declaration);
         SORT_MEMBERS_VISITOR.visit(declaration);
 
